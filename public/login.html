@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · Pictureline Inventory Tracker</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7; --surface-1: #fcfcfb; --text-primary: #0b0b0b;
+    --text-secondary: #52514e; --text-muted: #898781;
+    --border: rgba(11,11,11,0.10); --accent: #2a78d6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --page: #0d0d0d; --surface-1: #1a1a19; --text-primary: #ffffff;
+      --text-secondary: #c3c2b7; --text-muted: #898781;
+      --border: rgba(255,255,255,0.10); --accent: #3987e5;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--page); color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; align-items: center; justify-content: center; min-height: 100vh;
+  }
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px;
+    padding: 32px; width: 360px; max-width: calc(100vw - 32px);
+  }
+  h1 { font-size: 16px; margin: 0 0 4px; }
+  p { color: var(--text-secondary); font-size: 13px; margin: 0 0 18px; }
+  input, button {
+    font: inherit; width: 100%; padding: 9px 12px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--page); color: var(--text-primary);
+  }
+  button {
+    margin-top: 10px; background: var(--accent); color: #fff; border: none; cursor: pointer;
+    font-weight: 600;
+  }
+  button:disabled { opacity: 0.6; cursor: default; }
+  #msg { margin-top: 14px; font-size: 13px; color: var(--text-secondary); display: none; }
+</style>
+</head>
+<body>
+  <form class="card" id="form">
+    <h1>Pictureline inventory tracker</h1>
+    <p>Enter your email and we'll send you a sign-in link.</p>
+    <input type="email" id="email" placeholder="you@pictureline.com" required autofocus>
+    <button id="btn" type="submit">Email me a sign-in link</button>
+    <div id="msg"></div>
+  </form>
+<script>
+document.getElementById('form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const btn = document.getElementById('btn');
+  const msg = document.getElementById('msg');
+  btn.disabled = true;
+  try {
+    const res = await fetch('/auth/request', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: document.getElementById('email').value }),
+    });
+    if (!res.ok) throw new Error((await res.json()).error || res.statusText);
+    msg.textContent = 'If that address is authorized, a sign-in link is on its way. Check your inbox (and spam) — the link works once and expires in 15 minutes.';
+  } catch (err) {
+    msg.textContent = 'Error: ' + err.message;
+    btn.disabled = false;
+  }
+  msg.style.display = 'block';
+});
+</script>
+</body>
+</html>

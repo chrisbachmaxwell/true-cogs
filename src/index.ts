@@ -4,8 +4,21 @@ import { config, missingQboConfig } from './config';
 import { initDb, getConfigValue, setConfigValue, getCachedMonth, setCachedMonth } from './db';
 import { buildAuthUri, handleCallback, createQboApi, connectionStatus, QboApi } from './qbo';
 import { computeMonthlySpend, MonthlySpendResult } from './inventorySpend';
+import {
+  authConfigured,
+  requireAuth,
+  sessionEmail,
+  requestLoginLink,
+  consumeLoginToken,
+  setSessionCookie,
+  clearSessionCookie,
+} from './auth';
 
 const app = express();
+// Railway terminates TLS at its proxy; trust it so req.protocol is https.
+app.set('trust proxy', 1);
+app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
 
 const asyncRoute =
   (fn: (req: Request, res: Response) => Promise<any>) =>
@@ -33,6 +46,52 @@ app.get(
     res.redirect('/?connected=1');
   })
 );
+
+// ---- auth (email magic link; enforced only when RESEND_API_KEY is set) ----
+// /connect and /callback stay open on purpose: the person authorizing QuickBooks
+// (company admin) may not be a dashboard user, and neither route exposes data.
+
+function baseUrl(req: Request): string {
+  return `${req.protocol}://${req.get('host')}`;
+}
+
+app.get('/login', (req, res) => {
+  if (!authConfigured() || sessionEmail(req)) return res.redirect('/');
+  res.sendFile(path.join(__dirname, '..', 'public', 'login.html'));
+});
+
+app.post(
+  '/auth/request',
+  asyncRoute(async (req, res) => {
+    if (!authConfigured()) return res.status(503).json({ error: 'Sign-in is not configured' });
+    // Same response whether or not the address is allowed — no enumeration.
+    requestLoginLink(req.body?.email, baseUrl(req)).catch((err) =>
+      console.error('[auth] failed to send login link:', err)
+    );
+    res.json({ ok: true });
+  })
+);
+
+app.get(
+  '/auth/verify',
+  asyncRoute(async (req, res) => {
+    const email = await consumeLoginToken(String(req.query.token || ''));
+    if (!email) {
+      return res
+        .status(400)
+        .send('This sign-in link is invalid, expired, or already used. <a href="/login">Request a new one</a>.');
+    }
+    setSessionCookie(res, email);
+    res.redirect('/');
+  })
+);
+
+app.get('/auth/logout', (_req, res) => {
+  clearSessionCookie(res);
+  res.redirect('/login');
+});
+
+app.use(['/api/inventory-spend', '/api/inventory-spend/trend', '/api/status'], requireAuth);
 
 const ACCOUNT_ID_KEY = 'inventory_account_id';
 
@@ -118,9 +177,8 @@ app.get(
   })
 );
 
-app.use(express.static(path.join(__dirname, '..', 'public')));
-
-app.get('/', (_req, res) => {
+// No express.static: the dashboard must only be reachable through the auth gate.
+app.get(['/', '/index.html'], requireAuth, (_req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
 });
 

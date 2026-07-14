@@ -112,6 +112,7 @@
       <span id="loading">loading…</span>
       <input type="month" id="monthPicker">
       <button id="refreshBtn" title="Recompute from QuickBooks, bypassing cache">Refresh</button>
+      <a href="/auth/logout" style="color:var(--text-muted);font-size:12px;align-self:center">Sign out</a>
     </div>
   </header>
 
@@ -187,7 +188,9 @@ function showBanner(html) {
 }
 
 async function loadStatus() {
-  const s = await (await fetch('/api/status')).json();
+  const res = await fetch('/api/status');
+  if (res.status === 401) { location.href = '/login'; return false; }
+  const s = await res.json();
   $('env').textContent = s.environment === 'production' ? 'QuickBooks · production' : 'QuickBooks · sandbox';
   if (s.missingConfig) {
     showBanner('<strong>Not configured.</strong> Missing env vars: ' + s.missingConfig.join(', '));

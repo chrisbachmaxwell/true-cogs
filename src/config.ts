@@ -8,6 +8,12 @@ export interface AppConfig {
   databaseUrl: string | undefined;
   /** Chart-of-accounts account name whose spend we track. */
   inventoryAccountName: string;
+  /** Resend API key for magic-link sign-in emails. Auth is enforced only when set. */
+  resendApiKey: string | undefined;
+  /** Comma-separated allowlist of emails permitted to sign in. */
+  authAllowedEmails: string;
+  /** From address for sign-in emails. */
+  authFromEmail: string;
 }
 
 export const config: AppConfig = {
@@ -20,6 +26,9 @@ export const config: AppConfig = {
   tokenEncryptionKey: process.env.TOKEN_ENCRYPTION_KEY,
   databaseUrl: process.env.DATABASE_URL,
   inventoryAccountName: process.env.QBO_INVENTORY_ACCOUNT_NAME || 'Material Inventory',
+  resendApiKey: process.env.RESEND_API_KEY,
+  authAllowedEmails: process.env.AUTH_ALLOWED_EMAILS || 'chrism@pictureline.com',
+  authFromEmail: process.env.AUTH_FROM_EMAIL || 'Pictureline Tracker <onboarding@resend.dev>',
 };
 
 /** Missing env vars are reported per-feature instead of crashing the whole app,

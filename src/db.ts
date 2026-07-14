@@ -34,6 +34,15 @@ export async function initDb(): Promise<void> {
     );
   `);
   await db.query(`
+    CREATE TABLE IF NOT EXISTS login_tokens (
+      token_hash TEXT PRIMARY KEY,
+      email TEXT NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      used BOOLEAN NOT NULL DEFAULT false,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await db.query(`
     CREATE TABLE IF NOT EXISTS monthly_cache (
       month TEXT PRIMARY KEY,
       data JSONB NOT NULL,
