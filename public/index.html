@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pictureline · Inventory Cash Spend</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7;
+    --surface-1: #fcfcfb;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #898781;
+    --grid: #e1e0d9;
+    --baseline: #c3c2b7;
+    --border: rgba(11, 11, 11, 0.10);
+    --series-1: #2a78d6;
+    --warning-bg: #fff7e6;
+    --warning-border: #fab219;
+    --negative: #d03b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --page: #0d0d0d;
+      --surface-1: #1a1a19;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted: #898781;
+      --grid: #2c2c2a;
+      --baseline: #383835;
+      --border: rgba(255, 255, 255, 0.10);
+      --series-1: #3987e5;
+      --warning-bg: #2b2210;
+      --warning-border: #fab219;
+      --negative: #e66767;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 14px;
+    line-height: 1.45;
+  }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 24px 20px 64px; }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; margin-bottom: 20px; }
+  header h1 { font-size: 18px; font-weight: 600; margin: 0; }
+  header .env { color: var(--text-muted); font-size: 12px; }
+  .controls { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+  input[type="month"], button {
+    font: inherit;
+    color: var(--text-primary);
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+  }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--baseline); }
+  .banner {
+    border: 1px solid var(--warning-border);
+    background: var(--warning-bg);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 16px;
+    display: none;
+  }
+  .banner.show { display: block; }
+  .banner strong { margin-right: 6px; }
+  .card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+  }
+  .grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px; margin-bottom: 16px; }
+  @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+  .hero-label { color: var(--text-secondary); }
+  .hero-value { font-size: 48px; font-weight: 600; margin: 4px 0 2px; }
+  .hero-sub { color: var(--text-muted); font-size: 12px; }
+  .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .tile .t-label { color: var(--text-secondary); font-size: 12px; }
+  .tile .t-value { font-size: 20px; font-weight: 600; margin-top: 2px; }
+  .tile .t-note { color: var(--text-muted); font-size: 11px; margin-top: 2px; }
+  .chart-card { margin-bottom: 16px; }
+  .chart-card h2, .table-card h2 { font-size: 14px; font-weight: 600; margin: 0 0 12px; }
+  .chart-box { position: relative; height: 260px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--grid); }
+  th { color: var(--text-muted); font-weight: 500; font-size: 12px; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td .detail { color: var(--text-muted); font-size: 11px; display: block; }
+  .neg { color: var(--negative); }
+  .empty { color: var(--text-muted); padding: 20px 0; text-align: center; }
+  .warnings { color: var(--text-secondary); font-size: 12px; margin-top: 10px; }
+  #loading { color: var(--text-muted); display: none; }
+  #loading.show { display: inline; }
+  a.connect { color: var(--series-1); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Material Inventory — actual cash spend</h1>
+    <span class="env" id="env"></span>
+    <div class="controls">
+      <span id="loading">loading…</span>
+      <input type="month" id="monthPicker">
+      <button id="refreshBtn" title="Recompute from QuickBooks, bypassing cache">Refresh</button>
+    </div>
+  </header>
+
+  <div class="banner" id="banner"></div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="hero-label">Cash + card out the door for inventory, <span id="heroMonth"></span></div>
+      <div class="hero-value" id="heroValue">—</div>
+      <div class="hero-sub">Bill payments allocated by each bill's inventory share, plus direct purchases. Vendor credits applied at payment are already netted out.</div>
+    </div>
+    <div class="card tiles">
+      <div class="tile">
+        <div class="t-label">Bill payments (Bucket 1)</div>
+        <div class="t-value" id="bucket1">—</div>
+        <div class="t-note">Checks + cards against bills</div>
+      </div>
+      <div class="tile">
+        <div class="t-label">Direct purchases (Bucket 2)</div>
+        <div class="t-value" id="bucket2">—</div>
+        <div class="t-note">No bill involved</div>
+      </div>
+      <div class="tile">
+        <div class="t-label">Booked to inventory (accrual)</div>
+        <div class="t-value" id="booked">—</div>
+        <div class="t-note">Bill + purchase lines dated this month, paid or not</div>
+      </div>
+      <div class="tile">
+        <div class="t-label">Vendor credits applied</div>
+        <div class="t-value" id="credits">—</div>
+        <div class="t-note">Context only — already netted in cash figures</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card chart-card">
+    <h2>Trailing 12 months — actual inventory cash spend</h2>
+    <div class="chart-box"><canvas id="trendChart"></canvas></div>
+  </div>
+
+  <div class="card table-card">
+    <h2>Transaction breakdown — audit against the bank/card statement</h2>
+    <div style="overflow-x:auto">
+      <table>
+        <thead>
+          <tr><th>Date</th><th>Vendor</th><th>Source</th><th>Payment method</th><th class="num">Inventory amount</th></tr>
+        </thead>
+        <tbody id="txRows"></tbody>
+      </table>
+    </div>
+    <div class="empty" id="txEmpty" style="display:none">No inventory transactions this month.</div>
+    <div class="warnings" id="warnings"></div>
+  </div>
+</div>
+
+<script>
+const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
+const $ = (id) => document.getElementById(id);
+let chart = null;
+
+function css(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+function defaultMonth() {
+  return new Date().toISOString().slice(0, 7);
+}
+
+function showBanner(html) {
+  const b = $('banner');
+  b.innerHTML = html;
+  b.classList.add('show');
+}
+
+async function loadStatus() {
+  const s = await (await fetch('/api/status')).json();
+  $('env').textContent = s.environment === 'production' ? 'QuickBooks · production' : 'QuickBooks · sandbox';
+  if (s.missingConfig) {
+    showBanner('<strong>Not configured.</strong> Missing env vars: ' + s.missingConfig.join(', '));
+    return false;
+  }
+  if (!s.connected) {
+    showBanner('<strong>Not connected.</strong> <a class="connect" href="/connect">Connect to QuickBooks</a> to load data.');
+    return false;
+  }
+  if (s.staleWarning) {
+    showBanner('<strong>Connection warning.</strong> ' + s.staleWarning + ' <a class="connect" href="/connect">Reconnect</a>');
+  }
+  return true;
+}
+
+function renderMonth(d) {
+  $('heroMonth').textContent = d.month;
+  $('heroValue').textContent = usd.format(d.total);
+  $('bucket1').textContent = usd.format(d.bucket1Total);
+  $('bucket2').textContent = usd.format(d.bucket2Total);
+  $('booked').textContent = usd.format(d.bookedTotal);
+  $('credits').textContent = usd.format(d.vendorCreditsApplied);
+
+  const rows = $('txRows');
+  rows.innerHTML = '';
+  for (const t of d.transactions) {
+    const tr = document.createElement('tr');
+    const amountCls = t.amount < 0 ? 'num neg' : 'num';
+    tr.innerHTML =
+      '<td>' + t.date + '</td>' +
+      '<td>' + escapeHtml(t.vendor) + (t.detail ? '<span class="detail">' + escapeHtml(t.detail) + '</span>' : '') + '</td>' +
+      '<td>' + (t.sourceType === 'BillPayment' ? 'Bill payment' : 'Direct purchase') + '</td>' +
+      '<td>' + escapeHtml(t.paymentMethod) + '</td>' +
+      '<td class="' + amountCls + '">' + usd.format(t.amount) + '</td>';
+    rows.appendChild(tr);
+  }
+  $('txEmpty').style.display = d.transactions.length ? 'none' : 'block';
+  $('warnings').textContent = (d.warnings || []).map((w) => '⚠ ' + w).join('  ');
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function renderChart(months) {
+  const labels = months.map((m) => {
+    const [y, mo] = m.month.split('-');
+    return new Date(Date.UTC(+y, +mo - 1, 1)).toLocaleString('en-US', { month: 'short', timeZone: 'UTC' }) +
+      (mo === '01' ? ' ’' + y.slice(2) : '');
+  });
+  if (chart) chart.destroy();
+  chart = new Chart($('trendChart'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        data: months.map((m) => m.total),
+        backgroundColor: css('--series-1'),
+        maxBarThickness: 24,
+        borderRadius: { topLeft: 4, topRight: 4 },
+        borderSkipped: 'bottom',
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const m = months[ctx.dataIndex];
+              return [
+                'Total: ' + usd.format(m.total),
+                'Bill payments: ' + usd.format(m.bucket1Total),
+                'Direct purchases: ' + usd.format(m.bucket2Total),
+                'Booked (accrual): ' + usd.format(m.bookedTotal),
+              ];
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          grid: { display: false },
+          border: { color: css('--baseline') },
+          ticks: { color: css('--text-muted') },
+        },
+        y: {
+          beginAtZero: true,
+          grid: { color: css('--grid'), lineWidth: 1 },
+          border: { display: false },
+          ticks: {
+            color: css('--text-muted'),
+            callback: (v) => '$' + Number(v).toLocaleString('en-US'),
+          },
+        },
+      },
+      onClick: (_evt, els) => {
+        if (els.length) {
+          $('monthPicker').value = months[els[0].index].month;
+          loadMonth(false);
+        }
+      },
+    },
+  });
+}
+
+async function loadMonth(forceRefresh) {
+  const month = $('monthPicker').value || defaultMonth();
+  $('loading').classList.add('show');
+  try {
+    const res = await fetch('/api/inventory-spend?month=' + month + (forceRefresh ? '&refresh=1' : ''));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    renderMonth(data);
+  } catch (err) {
+    showBanner('<strong>Error.</strong> ' + escapeHtml(err.message));
+  } finally {
+    $('loading').classList.remove('show');
+  }
+}
+
+async function loadTrend() {
+  try {
+    const res = await fetch('/api/inventory-spend/trend?months=12');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    renderChart(data.months);
+  } catch (err) {
+    showBanner('<strong>Trend error.</strong> ' + escapeHtml(err.message));
+  }
+}
+
+async function init() {
+  $('monthPicker').value = defaultMonth();
+  $('monthPicker').addEventListener('change', () => loadMonth(false));
+  $('refreshBtn').addEventListener('click', () => { loadMonth(true); loadTrend(); });
+  const ok = await loadStatus();
+  if (!ok) return;
+  await loadMonth(false);
+  loadTrend();
+}
+init();
+</script>
+</body>
+</html>

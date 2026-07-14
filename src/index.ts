@@ -1,0 +1,148 @@
+import express, { Request, Response, NextFunction } from 'express';
+import path from 'path';
+import { config, missingQboConfig } from './config';
+import { initDb, getConfigValue, setConfigValue, getCachedMonth, setCachedMonth } from './db';
+import { buildAuthUri, handleCallback, createQboApi, connectionStatus, QboApi } from './qbo';
+import { computeMonthlySpend, MonthlySpendResult } from './inventorySpend';
+
+const app = express();
+
+const asyncRoute =
+  (fn: (req: Request, res: Response) => Promise<any>) =>
+  (req: Request, res: Response, next: NextFunction) =>
+    fn(req, res).catch(next);
+
+app.get('/health', (_req, res) => {
+  res.status(200).send('ok');
+});
+
+app.get('/connect', (_req, res) => {
+  const missing = missingQboConfig();
+  if (missing.length) {
+    return res.status(503).send(`QuickBooks is not configured. Missing env vars: ${missing.join(', ')}`);
+  }
+  res.redirect(buildAuthUri());
+});
+
+app.get(
+  '/callback',
+  asyncRoute(async (req, res) => {
+    await handleCallback(req.originalUrl);
+    // Account id can change between companies/environments — re-resolve on reconnect.
+    await setConfigValue('inventory_account_id', '');
+    res.redirect('/?connected=1');
+  })
+);
+
+const ACCOUNT_ID_KEY = 'inventory_account_id';
+
+async function getInventoryAccountId(api: QboApi): Promise<string> {
+  const cached = await getConfigValue(ACCOUNT_ID_KEY);
+  if (cached) return cached;
+  const accounts = await api.findAccountsByName(config.inventoryAccountName);
+  if (!accounts.length) {
+    throw new Error(
+      `No account named "${config.inventoryAccountName}" found in the Chart of Accounts`
+    );
+  }
+  const account = accounts.find((a) => a.Active !== false) || accounts[0];
+  await setConfigValue(ACCOUNT_ID_KEY, account.Id);
+  console.log(`[qbo] resolved "${config.inventoryAccountName}" account → Id ${account.Id}`);
+  return account.Id;
+}
+
+function currentMonthUtc(): string {
+  return new Date().toISOString().slice(0, 7);
+}
+
+const CURRENT_MONTH_CACHE_TTL_MS = 60 * 60 * 1000; // re-compute the open month hourly
+
+async function getMonthlySpend(month: string, forceRefresh: boolean): Promise<MonthlySpendResult> {
+  if (!forceRefresh) {
+    const cached = await getCachedMonth(month);
+    if (cached) {
+      const isClosedMonth = month < currentMonthUtc();
+      const fresh = Date.now() - new Date(cached.computedAt).getTime() < CURRENT_MONTH_CACHE_TTL_MS;
+      if (isClosedMonth || fresh) return cached.data as MonthlySpendResult;
+    }
+  }
+  const api = await createQboApi();
+  const accountId = await getInventoryAccountId(api);
+  const result = await computeMonthlySpend(api, accountId, month);
+  await setCachedMonth(month, result);
+  return result;
+}
+
+app.get(
+  '/api/inventory-spend',
+  asyncRoute(async (req, res) => {
+    const month = String(req.query.month || '');
+    if (!/^\d{4}-\d{2}$/.test(month)) {
+      return res.status(400).json({ error: 'Provide ?month=YYYY-MM' });
+    }
+    const result = await getMonthlySpend(month, req.query.refresh === '1');
+    res.json(result);
+  })
+);
+
+app.get(
+  '/api/inventory-spend/trend',
+  asyncRoute(async (req, res) => {
+    const months = Math.min(Math.max(parseInt(String(req.query.months || '12'), 10) || 12, 1), 36);
+    const now = new Date();
+    const list: { month: string; total: number; bucket1Total: number; bucket2Total: number; bookedTotal: number }[] = [];
+    for (let i = months - 1; i >= 0; i--) {
+      const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+      const month = d.toISOString().slice(0, 7);
+      const r = await getMonthlySpend(month, false);
+      list.push({
+        month,
+        total: r.total,
+        bucket1Total: r.bucket1Total,
+        bucket2Total: r.bucket2Total,
+        bookedTotal: r.bookedTotal,
+      });
+    }
+    res.json({ months: list });
+  })
+);
+
+app.get(
+  '/api/status',
+  asyncRoute(async (_req, res) => {
+    const missing = missingQboConfig();
+    if (missing.length) {
+      return res.json({ connected: false, environment: config.qboEnvironment, missingConfig: missing });
+    }
+    res.json(await connectionStatus());
+  })
+);
+
+app.use(express.static(path.join(__dirname, '..', 'public')));
+
+app.get('/', (_req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
+});
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+  console.error('[error]', err);
+  res.status(500).json({ error: err.message || 'Internal error' });
+});
+
+async function main() {
+  if (config.databaseUrl) {
+    await initDb();
+    console.log('[db] schema ready');
+  } else {
+    console.warn('[db] DATABASE_URL not set — token storage and caching disabled');
+  }
+  app.listen(config.port, () => {
+    console.log(`[server] listening on :${config.port} (${config.qboEnvironment})`);
+  });
+}
+
+main().catch((err) => {
+  console.error('Fatal startup error:', err);
+  process.exit(1);
+});
