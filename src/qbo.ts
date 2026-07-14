@@ -113,13 +113,69 @@ function qboClient(tokens: TokenSet): any {
   );
 }
 
-function callFinder(qbo: any, method: string, criteria: any[]): Promise<any> {
-  return new Promise((resolve, reject) => {
-    qbo[method](criteria, (err: any, data: any) => {
-      if (err) reject(new Error(`QBO ${method} failed: ${JSON.stringify(err.Fault || err)}`));
-      else resolve(data);
-    });
+/** Builds a safe error: only the HTTP status and QBO Fault details — never the
+ * raw axios error, whose config would leak the Authorization header. */
+function qboError(label: string, err: any): Error {
+  const status = err?.status ?? err?.response?.status;
+  const fault = err?.Fault ?? err?.response?.data?.Fault;
+  let detail: string;
+  if (fault?.Error?.length) {
+    detail = fault.Error.map((e: any) => `${e.Message}${e.Detail ? ` — ${e.Detail}` : ''}`).join('; ');
+  } else if (status === 429) {
+    detail = 'QuickBooks rate limit exceeded';
+  } else {
+    detail = typeof err?.message === 'string' ? err.message : 'Unknown error';
+  }
+  return new Error(`QBO ${label} failed${status ? ` (HTTP ${status})` : ''}: ${detail}`);
+}
+
+function isRateLimit(err: any): boolean {
+  const status = err?.status ?? err?.response?.status;
+  return status === 429 || /status code 429/.test(String(err?.message || ''));
+}
+
+// Production QBO allows ~500 requests/minute per realm. Pace all API calls
+// through one queue with a minimum gap, and back off on 429s.
+const MIN_REQUEST_GAP_MS = 150;
+const MAX_RETRIES = 5;
+let requestChain: Promise<void> = Promise.resolve();
+let lastRequestAt = 0;
+
+function throttleSlot(): Promise<void> {
+  const slot = requestChain.then(async () => {
+    const wait = lastRequestAt + MIN_REQUEST_GAP_MS - Date.now();
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    lastRequestAt = Date.now();
   });
+  requestChain = slot.catch(() => undefined);
+  return slot;
+}
+
+async function withThrottleAndRetry<T>(label: string, fn: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    await throttleSlot();
+    try {
+      return await fn();
+    } catch (err: any) {
+      if (isRateLimit(err) && attempt < MAX_RETRIES) {
+        const delay = Math.min(2 ** attempt * 1000, 30_000) + Math.floor(Math.random() * 500);
+        console.warn(`[qbo] 429 on ${label} — retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES})`);
+        await new Promise((r) => setTimeout(r, delay));
+        continue;
+      }
+      throw qboError(label, err);
+    }
+  }
+}
+
+function callFinder(qbo: any, method: string, criteria: any[]): Promise<any> {
+  return withThrottleAndRetry(
+    method,
+    () =>
+      new Promise((resolve, reject) => {
+        qbo[method](criteria, (err: any, data: any) => (err ? reject(err) : resolve(data)));
+      })
+  );
 }
 
 const PAGE_SIZE = 1000; // QBO's max page size
@@ -155,12 +211,13 @@ export async function createQboApi(): Promise<QboApi> {
       ]);
     },
     getBill(id: string) {
-      return new Promise((resolve, reject) => {
-        qbo.getBill(id, (err: any, bill: any) => {
-          if (err) reject(new Error(`QBO getBill(${id}) failed: ${JSON.stringify(err.Fault || err)}`));
-          else resolve(bill);
-        });
-      });
+      return withThrottleAndRetry(
+        `getBill(${id})`,
+        () =>
+          new Promise((resolve, reject) => {
+            qbo.getBill(id, (err: any, bill: any) => (err ? reject(err) : resolve(bill)));
+          })
+      );
     },
     findAccountsByName(name: string) {
       return callFinder(qbo, 'findAccounts', [{ field: 'Name', value: name }]).then(

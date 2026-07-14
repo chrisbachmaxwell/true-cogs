@@ -134,6 +134,65 @@ test('bucket 1: bill with no inventory lines contributes nothing', async () => {
   assert.equal(r.transactions.length, 0);
 });
 
+test('bucket 1: vendor-discount bill never attributes more than cash paid', async () => {
+  // Bill: $145.60 inventory + a -$5.09 vendor-discount line = $140.51 total.
+  // Old formula (divide by TotalAmt) attributed $145.60 from a $140.51 payment.
+  // Dividing by the positive charge lines caps attribution at the cash paid.
+  const api = mockApi({
+    bills: {
+      'B6': {
+        Id: 'B6',
+        TotalAmt: 140.51,
+        Line: [
+          expenseLine(MAT_INV, 145.6),
+          { DetailType: 'AccountBasedExpenseLineDetail', Amount: -5.09,
+            AccountBasedExpenseLineDetail: { AccountRef: { value: OTHER } } },
+        ],
+      },
+    },
+    billPayments: [
+      {
+        Id: 'BP6',
+        TxnDate: '2026-06-12',
+        PayType: 'Check',
+        VendorRef: { name: 'Nikon' },
+        Line: [{ Amount: 140.51, LinkedTxn: [{ TxnType: 'Bill', TxnId: 'B6' }] }],
+      },
+    ],
+  });
+  const r = await computeMonthlySpend(api, MAT_INV, '2026-06');
+  assert.equal(r.bucket1Total, 140.51);
+});
+
+test('bucket 1: discount on a mixed bill spreads pro-rata across charge lines', async () => {
+  // $100 inventory + $50 freight - $10 discount = $140 paid in full.
+  // Inventory share of charges = 100/150, so attribution = 140 × 2/3 = 93.33.
+  const api = mockApi({
+    bills: {
+      'B7': {
+        Id: 'B7',
+        TotalAmt: 140,
+        Line: [
+          expenseLine(MAT_INV, 100),
+          expenseLine(OTHER, 50),
+          { DetailType: 'AccountBasedExpenseLineDetail', Amount: -10,
+            AccountBasedExpenseLineDetail: { AccountRef: { value: OTHER } } },
+        ],
+      },
+    },
+    billPayments: [
+      {
+        Id: 'BP7',
+        TxnDate: '2026-06-13',
+        PayType: 'Check',
+        Line: [{ Amount: 140, LinkedTxn: [{ TxnType: 'Bill', TxnId: 'B7' }] }],
+      },
+    ],
+  });
+  const r = await computeMonthlySpend(api, MAT_INV, '2026-06');
+  assert.equal(r.bucket1Total, 93.33);
+});
+
 test('bucket 2: purchases add, Credit=true purchases subtract', async () => {
   const api = mockApi({
     purchases: [

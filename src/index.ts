@@ -116,6 +116,10 @@ function currentMonthUtc(): string {
 
 const CURRENT_MONTH_CACHE_TTL_MS = 60 * 60 * 1000; // re-compute the open month hourly
 
+// The dashboard requests the current month and the trend at once; both can ask
+// for the same uncached month, so identical computations share one promise.
+const inFlightMonths = new Map<string, Promise<MonthlySpendResult>>();
+
 async function getMonthlySpend(month: string, forceRefresh: boolean): Promise<MonthlySpendResult> {
   if (!forceRefresh) {
     const cached = await getCachedMonth(month);
@@ -124,12 +128,18 @@ async function getMonthlySpend(month: string, forceRefresh: boolean): Promise<Mo
       const fresh = Date.now() - new Date(cached.computedAt).getTime() < CURRENT_MONTH_CACHE_TTL_MS;
       if (isClosedMonth || fresh) return cached.data as MonthlySpendResult;
     }
+    const inFlight = inFlightMonths.get(month);
+    if (inFlight) return inFlight;
   }
-  const api = await createQboApi();
-  const accountId = await getInventoryAccountId(api);
-  const result = await computeMonthlySpend(api, accountId, month);
-  await setCachedMonth(month, result);
-  return result;
+  const promise = (async () => {
+    const api = await createQboApi();
+    const accountId = await getInventoryAccountId(api);
+    const result = await computeMonthlySpend(api, accountId, month);
+    await setCachedMonth(month, result);
+    return result;
+  })().finally(() => inFlightMonths.delete(month));
+  inFlightMonths.set(month, promise);
+  return promise;
 }
 
 app.get(

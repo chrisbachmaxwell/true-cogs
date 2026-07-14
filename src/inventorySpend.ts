@@ -47,6 +47,20 @@ export interface MonthlySpendResult {
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
+/** Sum of all positive line amounts (any detail type). Used as the allocation
+ * denominator: bills with vendor-discount lines (negative amounts to a discount
+ * account) have TotalAmt < sum of charge lines, and dividing by TotalAmt would
+ * attribute more cash than was actually paid. Dividing by the positive-line sum
+ * spreads the discount pro-rata and keeps attribution ≤ cash paid. */
+export function positiveLineTotal(txn: any): number {
+  let sum = 0;
+  for (const line of txn?.Line || []) {
+    const amt = Number(line.Amount) || 0;
+    if (amt > 0) sum += amt;
+  }
+  return sum;
+}
+
 /** Sums Amount over AccountBasedExpenseLineDetail lines coded to the given account. */
 export function inventoryPortionOfLines(txn: any, accountId: string): number {
   let sum = 0;
@@ -119,16 +133,20 @@ export async function computeMonthlySpend(
       const bill = await getBill(linkedBill.TxnId);
       const billTotal = Number(bill?.TotalAmt) || 0;
       const inventoryPortionOfBill = inventoryPortionOfLines(bill, inventoryAccountId);
-      if (billTotal <= 0 || inventoryPortionOfBill <= 0) continue;
+      // Denominator is the sum of the bill's charge (positive) lines, not TotalAmt:
+      // with vendor-discount lines, TotalAmt is net of the discount and would
+      // yield a ratio > 1, over-attributing beyond the cash that actually left.
+      const chargeTotal = positiveLineTotal(bill) || billTotal;
+      if (chargeTotal <= 0 || inventoryPortionOfBill <= 0) continue;
 
-      const inventoryRatio = inventoryPortionOfBill / billTotal;
+      const inventoryRatio = inventoryPortionOfBill / chargeTotal;
       const attributed = round2((Number(line.Amount) || 0) * inventoryRatio);
       if (attributed === 0) continue;
 
       bucket1Total += attributed;
       console.log(
         `[spend ${month}] BillPayment ${bp.Id} → Bill ${linkedBill.TxnId}: ` +
-          `paid ${line.Amount}, bill total ${billTotal}, inventory portion ${inventoryPortionOfBill}, ` +
+          `paid ${line.Amount}, bill total ${billTotal}, charges ${chargeTotal}, inventory portion ${inventoryPortionOfBill}, ` +
           `ratio ${inventoryRatio.toFixed(4)}, attributed ${attributed}`
       );
       transactions.push({
@@ -139,8 +157,9 @@ export async function computeMonthlySpend(
         amount: attributed,
         detail:
           `Bill #${bill?.DocNumber || linkedBill.TxnId}: $${inventoryPortionOfBill.toFixed(2)} of ` +
-          `$${billTotal.toFixed(2)} is inventory (${(inventoryRatio * 100).toFixed(1)}%); ` +
-          `payment of $${Number(line.Amount).toFixed(2)} × ratio`,
+          `$${chargeTotal.toFixed(2)} in charges is inventory (${(inventoryRatio * 100).toFixed(1)}%); ` +
+          `payment of $${Number(line.Amount).toFixed(2)} × ratio` +
+          (chargeTotal > billTotal ? `; bill net of $${(chargeTotal - billTotal).toFixed(2)} discount` : ''),
       });
     }
   }
