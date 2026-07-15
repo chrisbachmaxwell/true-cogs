@@ -965,9 +965,10 @@ async function getStatement(range: { start: string; end: string }, force: boolea
             if (row.Rows) walk(row.Rows, isExpenseSection);
           }
         };
+        // All accounts, not a top-N: the category drill-down's sum check needs
+        // the full list to tie to the books total.
         walk(report?.Rows, false);
         expenses.rows.sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
-        expenses.rows = expenses.rows.slice(0, 30);
       } catch (err: any) {
         console.warn('[pnl-statement] expense report unavailable:', err.message);
       }
@@ -1060,40 +1061,49 @@ app.get(
     const range = validDateRange(req, res);
     if (!range) return;
     const line = String(req.query.line || '');
-    const spendLines: Record<string, () => Promise<{ ids: string[]; label: string }>> = {
-      inventory: async () => ({
-        ids: (await getTrackedAccounts()).map((t) => t.id),
-        label: 'Inventory purchases (cash)',
-      }),
-      directCosts: async () => ({
-        ids: (await getDirectCostAccounts(await getComputeApi())).map((t) => t.id),
-        label: 'Freight, repairs & materials',
-      }),
-      salesTax: async () => ({
-        ids: (await getSalesTaxAccounts(await getComputeApi())).map((t) => t.id),
-        label: 'Sales tax remitted',
-      }),
+    const spendLines: Record<string, () => Promise<TrackedAccount[]>> = {
+      inventory: async () => getTrackedAccounts(),
+      directCosts: async () => getDirectCostAccounts(await getComputeApi()),
+      salesTax: async () => getSalesTaxAccounts(await getComputeApi()),
     };
 
     if (line in spendLines) {
-      const { ids } = await spendLines[line]();
-      if (!ids.length) return res.json({ line, rows: [], sum: 0, note: 'No accounts configured for this line.' });
-      const spend = await dedupe(`dt:${line}:${range.start}:${range.end}`, async () =>
-        computeMonthlySpend(await getComputeApi(), ids, range)
-      );
-      const rows: DetailRow[] = spend.transactions.map((t) => ({
-        date: t.date,
-        name: t.vendor,
-        txnType: t.sourceType === 'BillPayment' ? 'BillPayment' : t.paymentMethod === 'Check' ? 'Check' : 'Purchase',
-        txnId: t.txnId ?? null,
-        amount: t.amount,
-        detail: t.detail,
-      }));
+      const accounts = await spendLines[line]();
+      if (!accounts.length) return res.json({ line, rows: [], sum: 0, note: 'No accounts configured for this line.' });
+      const toRows = (spend: MonthlySpendResult, group: (t: any) => string): DetailRow[] =>
+        spend.transactions.map((t) => ({
+          date: t.date,
+          name: t.vendor,
+          txnType: t.sourceType === 'BillPayment' ? 'BillPayment' : t.paymentMethod === 'Check' ? 'Check' : 'Purchase',
+          txnId: t.txnId ?? null,
+          amount: t.amount,
+          detail: t.detail,
+          group: group(t),
+        }));
+      const result = await dedupe(`dt:${line}:${range.start}:${range.end}`, async () => {
+        const api = await getComputeApi();
+        // Direct costs group by cost category (freight / repairs / materials):
+        // one compute per account so every row knows which account it hit.
+        if (line === 'directCosts' && accounts.length > 1) {
+          const rows: DetailRow[] = [];
+          let sum = 0;
+          for (const a of accounts) {
+            const spend = await computeMonthlySpend(api, [a.id], range);
+            sum += spend.total;
+            rows.push(...toRows(spend, () => `${a.acctNum ? `#${a.acctNum} ` : ''}${a.name}`));
+          }
+          rows.sort((x, y) => x.date.localeCompare(y.date));
+          return { rows, sum: Math.round(sum * 100) / 100 };
+        }
+        // Inventory and tax group by payee.
+        const spend = await computeMonthlySpend(api, accounts.map((a) => a.id), range);
+        return { rows: toRows(spend, (t) => t.vendor), sum: spend.total };
+      });
       const note =
-        line === 'salesTax' && spend.total === 0
+        line === 'salesTax' && result.sum === 0
           ? 'No remittance transactions are visible to the API for this range — the statement fell back to the tax account’s balance movement, which can’t be itemized here.'
           : undefined;
-      return res.json({ line, rows, sum: spend.total, note });
+      return res.json({ line, rows: result.rows, sum: result.sum, note });
     }
 
     const incomeLines = ['deposits', 'invoicePayments', 'salesReceipts', 'refunds', 'rebates', 'reimbursements'];

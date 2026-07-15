@@ -24,7 +24,7 @@
 
   <div class="kpis" style="margin-top:22px">
     <div class="kpi"><div class="k-label">Net revenue</div><div class="k-value" id="kRev">—</div><div class="k-note">Cash received, net of sales tax</div></div>
-    <div class="kpi"><div class="k-label">Total COGS</div><div class="k-value" id="kCogs">—</div><div class="k-note">Inventory + freight − rebates</div></div>
+    <div class="kpi"><div class="k-label">Total COGS</div><div class="k-value" id="kCogs">—</div><div class="k-note" id="kCogsNote">—</div></div>
     <div class="kpi"><div class="k-label">Gross profit</div><div class="k-value" id="kGp">—</div><div class="k-note" id="kGpNote">—</div></div>
     <div class="kpi"><div class="k-label">NOI</div><div class="k-value" id="kNoi">—</div><div class="k-note">After expenses from the books</div></div>
   </div>
@@ -61,13 +61,22 @@ async function load() {
   try {
     const d = await jfetch('/api/pnl-statement?' + Range.qs());
     if (!fresh()) return;
+    // Same numbers as the P&L page: accounting basis whenever inventory
+    // counts cover the range, cash basis (labeled) only as a fallback.
+    const cogs = d.adjusted ? d.adjusted.cogsTotal : d.cogs.total;
+    const gp = d.adjusted ? d.adjusted.grossProfit : d.grossProfit;
+    const margin = d.adjusted ? d.adjusted.grossMarginPct : d.grossMarginPct;
+    const noi = d.adjusted ? d.adjusted.noi : d.noi;
     $('kRev').textContent = usd.format(d.income.netRevenue);
-    $('kCogs').textContent = usd.format(d.cogs.total);
-    $('kGp').textContent = usd.format(d.grossProfit);
-    $('kGp').classList.toggle('neg', d.grossProfit < 0);
-    $('kGpNote').textContent = d.grossMarginPct !== null ? d.grossMarginPct.toFixed(1) + '% margin' : '—';
-    $('kNoi').textContent = usd.format(d.noi);
-    $('kNoi').classList.toggle('neg', d.noi < 0);
+    $('kCogs').textContent = usd.format(cogs);
+    $('kCogsNote').textContent = d.adjusted
+      ? 'Accounting basis (counts ' + d.adjusted.beginAsOf + ' → ' + d.adjusted.endAsOf + ')'
+      : 'Cash basis — no inventory counts for this range';
+    $('kGp').textContent = usd.format(gp);
+    $('kGp').classList.toggle('neg', gp < 0);
+    $('kGpNote').textContent = margin !== null ? margin.toFixed(1) + '% margin' : '—';
+    $('kNoi').textContent = usd.format(noi);
+    $('kNoi').classList.toggle('neg', noi < 0);
   } catch (err) {
     if (err.message !== 'signed out') showBanner('<strong>Error.</strong> ' + escapeHtml(err.message));
   } finally {

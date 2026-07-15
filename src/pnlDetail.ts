@@ -16,6 +16,8 @@ export interface DetailRow {
   txnId: string | null;
   amount: number;
   detail?: string;
+  /** Category for the first drill-down level (account, vendor, or customer). */
+  group?: string;
 }
 
 export interface PnlDetail {
@@ -79,6 +81,7 @@ export async function computePnlDetail(
         txnId: d.Id ? String(d.Id) : null,
         amount: round2(portion),
         detail: d.PrivateNote || undefined,
+        group: incomeAccounts.join(', ') || 'Deposit',
       });
     }
     if (ctx.accountTypes) {
@@ -96,6 +99,7 @@ export async function computePnlDetail(
           txnId: d.Id ? String(d.Id) : null,
           amount: round2(amt),
           detail: line.Description || undefined,
+          group: acctName(ref),
         };
         if (type === 'Cost of Goods Sold') rebates.push(row);
         else if (type === 'Expense' || type === 'Other Expense') reimbursements.push(row);
@@ -106,14 +110,18 @@ export async function computePnlDetail(
   const customerRows = (txns: any[], txnType: string): DetailRow[] =>
     txns
       .filter(toBank)
-      .map((t) => ({
-        date: t.TxnDate,
-        name: t.CustomerRef?.name || t.CustomerRef?.value || 'Unknown customer',
-        txnType,
-        txnId: t.Id ? String(t.Id) : null,
-        amount: round2(Number(t.TotalAmt) || 0),
-        detail: t.PaymentRefNum ? `Ref ${t.PaymentRefNum}` : undefined,
-      }));
+      .map((t) => {
+        const customer = t.CustomerRef?.name || t.CustomerRef?.value || 'Unknown customer';
+        return {
+          date: t.TxnDate,
+          name: customer,
+          txnType,
+          txnId: t.Id ? String(t.Id) : null,
+          amount: round2(Number(t.TotalAmt) || 0),
+          detail: t.PaymentRefNum ? `Ref ${t.PaymentRefNum}` : undefined,
+          group: customer,
+        };
+      });
 
   const invoicePayments = customerRows(paymentsTxns, 'Payment');
   const salesReceipts = customerRows(salesReceiptsTxns, 'SalesReceipt');

@@ -43,11 +43,12 @@
   <div class="card" id="detailCard" style="display:none">
     <div class="dhead">
       <h2 id="dTitle"></h2>
+      <button class="btn" id="dBack" style="display:none">← Categories</button>
       <button class="btn" id="dCsv">Download CSV</button>
       <button class="btn" id="dClose">Close</button>
     </div>
     <div style="overflow-x:auto"><table>
-      <thead><tr><th>Date</th><th>Who / what</th><th>Type</th><th class="num">Amount</th></tr></thead>
+      <thead id="dHead"></thead>
       <tbody id="dRows"></tbody>
     </table></div>
     <div class="dcheck" id="dCheck" style="display:none"></div>
@@ -79,7 +80,6 @@
 <script src="/app.js"></script>
 <script>
 let stmtData = null;
-let detailRows = [];
 let detailSeq = 0;
 
 // Deep links into QuickBooks so the source document can be inspected.
@@ -122,56 +122,144 @@ function expectedFor(key) {
   }
 }
 
-async function openDetail(key, label) {
-  const my = ++detailSeq;
+// Two-level drill-down state: level 1 groups rows by category (account,
+// vendor, or customer); clicking a category shows its transactions.
+let dState = null; // { label, rows, groups, mode: 'groups'|'rows', group, expected, note, kind }
+
+function showPanel(title) {
   const card = $('detailCard');
   card.style.display = '';
-  $('dTitle').textContent = label;
-  $('dRows').innerHTML = '<tr><td colspan="4" class="empty">Loading transactions…</td></tr>';
+  $('dTitle').textContent = title;
+  $('dHead').innerHTML = '';
+  $('dRows').innerHTML = '<tr><td colspan="4" class="empty">Loading…</td></tr>';
   $('dCheck').style.display = 'none';
+  $('dBack').style.display = 'none';
   $('dNote').textContent = '';
   card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function groupRows(rows) {
+  const by = new Map();
+  for (const r of rows) {
+    const key = r.group || r.name || '—';
+    const g = by.get(key) || { group: key, count: 0, amount: 0 };
+    g.count++;
+    g.amount += r.amount;
+    by.set(key, g);
+  }
+  return [...by.values()]
+    .map((g) => ({ ...g, amount: Math.round(g.amount * 100) / 100 }))
+    .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+}
+
+async function openDetail(key, label) {
+  const my = ++detailSeq;
+  showPanel(label);
   try {
     const d = await jfetch('/api/pnl-detail?' + Range.qs() + '&line=' + encodeURIComponent(key));
     if (my !== detailSeq) return;
-    renderDetail(d.rows, d.sum, expectedFor(key), d.note, key === 'inventoryChange');
+    const groups = groupRows(d.rows);
+    dState = {
+      label, rows: d.rows, groups, expected: expectedFor(key), note: d.note,
+      kind: key === 'inventoryChange' ? 'counts' : 'normal',
+      mode: groups.length > 1 && d.rows.length > groups.length ? 'groups' : 'rows',
+      group: null,
+    };
+    renderCurrent();
   } catch (err) {
     if (my !== detailSeq) return;
     if (err.message !== 'signed out') $('dRows').innerHTML = '<tr><td colspan="4" class="empty">Couldn’t load: ' + escapeHtml(err.message) + '</td></tr>';
   }
 }
 
+// Level 1 for total operating expenses: the books' expense accounts.
+function openExpenseBreakdown() {
+  const rows = (stmtData.expenses.rows || []).map((e) => ({ ...e }));
+  showPanel('Operating expenses — by category');
+  dState = {
+    label: 'Operating expenses', kind: 'expenseCats',
+    rows, groups: rows.map((e) => ({ group: e.name, count: null, amount: e.amount, id: e.id })),
+    expected: stmtData.expenses.totalFromBooks, note: null, mode: 'groups', group: null,
+  };
+  renderCurrent();
+}
+
+// Level 2 for one expense account: its transactions from the mirror.
 async function openExpenseDetail(accountId, name, booksAmount) {
   const my = ++detailSeq;
-  const card = $('detailCard');
-  card.style.display = '';
-  $('dTitle').textContent = 'Expense — ' + name;
-  $('dRows').innerHTML = '<tr><td colspan="4" class="empty">Loading transactions…</td></tr>';
-  $('dCheck').style.display = 'none';
-  $('dNote').textContent = '';
-  card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  const cameFromCats = dState && dState.kind === 'expenseCats' ? dState : null;
+  showPanel('Expense — ' + name);
   try {
     const d = await jfetch('/api/expense-detail?' + Range.qs() + '&account=' + encodeURIComponent(accountId));
     if (my !== detailSeq) return;
-    const remainder = Math.round((booksAmount - d.sum) * 100) / 100;
     const rows = d.rows.slice();
+    const remainder = Math.round((booksAmount - d.sum) * 100) / 100;
     if (Math.abs(remainder) > 0.01) {
       rows.push({
         date: '', name: 'Not itemizable through the API (payroll, tax-center, or report-only activity) — open the account in QuickBooks to see it',
         txnType: '', txnId: null, amount: remainder,
       });
     }
-    renderDetail(rows, booksAmount, booksAmount, null, false);
+    dState = {
+      label: 'Expense — ' + name, rows, groups: [], expected: booksAmount, note: null,
+      kind: 'normal', mode: 'rows', group: null, parent: cameFromCats,
+    };
+    renderCurrent();
   } catch (err) {
     if (my !== detailSeq) return;
     if (err.message !== 'signed out') $('dRows').innerHTML = '<tr><td colspan="4" class="empty">Couldn’t load: ' + escapeHtml(err.message) + '</td></tr>';
   }
 }
 
-function renderDetail(rows, sum, expected, note, isCounts) {
-  detailRows = rows;
+function renderCurrent() {
+  const s = dState;
+  if (!s) return;
+  const head = $('dHead');
   const body = $('dRows');
+  const check = $('dCheck');
   body.innerHTML = '';
+  check.style.display = 'none';
+  $('dNote').textContent = s.note || '';
+  $('dBack').style.display = s.mode === 'rows' && (s.group !== null || s.parent) ? '' : 'none';
+
+  if (s.mode === 'groups') {
+    $('dTitle').textContent = s.label + ' — by category';
+    head.innerHTML = '<tr><th>Category</th><th class="num">Transactions</th><th class="num">Amount</th></tr>';
+    for (const g of s.groups) {
+      const tr = document.createElement('tr');
+      tr.className = 'exp-click';
+      tr.innerHTML =
+        '<td>' + escapeHtml(g.group) + '</td>' +
+        '<td class="num">' + (g.count === null ? '—' : g.count) + '</td>' +
+        '<td class="num' + (g.amount < 0 ? ' neg' : '') + '">' + usd2.format(g.amount) + '</td>';
+      tr.addEventListener('click', () => {
+        if (s.kind === 'expenseCats') {
+          if (g.id) openExpenseDetail(g.id, g.group, g.amount);
+          return;
+        }
+        s.mode = 'rows';
+        s.group = g.group;
+        renderCurrent();
+      });
+      body.appendChild(tr);
+    }
+    const total = Math.round(s.groups.reduce((t, g) => t + g.amount, 0) * 100) / 100;
+    if (s.expected !== null && s.expected !== undefined) {
+      const ok = Math.abs(total - s.expected) <= 0.01;
+      check.style.display = '';
+      check.className = 'dcheck ' + (ok ? 'ok' : 'bad');
+      check.textContent = ok
+        ? '✓ These ' + s.groups.length + ' categories sum to ' + usd2.format(total) + ' — matches the statement.'
+        : '✗ Categories sum to ' + usd2.format(total) + ' but the statement shows ' + usd2.format(s.expected) +
+          ' (difference ' + usd2.format(total - s.expected) + '). The statement may be stale — press Refresh.';
+    }
+    return;
+  }
+
+  // rows mode
+  const rows = s.group === null ? s.rows : s.rows.filter((r) => (r.group || r.name || '—') === s.group);
+  $('dTitle').textContent = s.group === null ? s.label : s.label + ' — ' + s.group;
+  head.innerHTML = '<tr><th>Date</th><th>Who / what</th><th>Type</th><th class="num">Amount</th></tr>';
   for (const r of rows) {
     const link = qboLink(r.txnType, r.txnId);
     const tr = document.createElement('tr');
@@ -183,23 +271,43 @@ function renderDetail(rows, sum, expected, note, isCounts) {
     body.appendChild(tr);
   }
   if (!rows.length) body.innerHTML = '<tr><td colspan="4" class="empty">No transactions in this range.</td></tr>';
-  const check = $('dCheck');
-  if (expected !== null && expected !== undefined && !isCounts) {
+  const sum = Math.round(rows.reduce((t, r) => t + r.amount, 0) * 100) / 100;
+  const expected = s.group === null
+    ? s.expected
+    : (s.groups.find((g) => g.group === s.group) || {}).amount;
+  if (expected !== null && expected !== undefined && s.kind !== 'counts') {
     const ok = Math.abs(sum - expected) <= 0.01;
     check.style.display = '';
     check.className = 'dcheck ' + (ok ? 'ok' : 'bad');
     check.textContent = ok
-      ? '✓ These ' + rows.length + ' rows sum to ' + usd2.format(sum) + ' — matches the statement.'
-      : '✗ These rows sum to ' + usd2.format(sum) + ' but the statement shows ' + usd2.format(expected) +
+      ? '✓ These ' + rows.length + ' rows sum to ' + usd2.format(sum) + ' — matches ' + (s.group === null ? 'the statement.' : 'the category total.')
+      : '✗ These rows sum to ' + usd2.format(sum) + ' but expected ' + usd2.format(expected) +
         ' (difference ' + usd2.format(sum - expected) + '). The statement may be stale — press Refresh — or something changed in QuickBooks.';
   }
-  if (note) $('dNote').textContent = note;
+}
+
+function goBack() {
+  const s = dState;
+  if (!s) return;
+  if (s.parent) { dState = s.parent; dState.mode = 'groups'; renderCurrent(); return; }
+  s.mode = 'groups';
+  s.group = null;
+  renderCurrent();
 }
 
 function downloadCsv() {
+  const s = dState;
+  if (!s) return;
   const esc = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
-  const lines = ['Date,Name,Type,Amount,Detail'];
-  for (const r of detailRows) lines.push([r.date, r.name, r.txnType, r.amount, r.detail || ''].map(esc).join(','));
+  let lines;
+  if (s.mode === 'groups') {
+    lines = ['Category,Transactions,Amount'];
+    for (const g of s.groups) lines.push([g.group, g.count == null ? '' : g.count, g.amount].map(esc).join(','));
+  } else {
+    const rows = s.group === null ? s.rows : s.rows.filter((r) => (r.group || r.name || '—') === s.group);
+    lines = ['Date,Name,Type,Amount,Detail'];
+    for (const r of rows) lines.push([r.date, r.name, r.txnType, r.amount, r.detail || ''].map(esc).join(','));
+  }
   const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -240,7 +348,7 @@ async function load(force) {
       h += row('Gross profit' + (d.grossMarginPct !== null ? ' — ' + d.grossMarginPct.toFixed(1) + '%' : ''), d.grossProfit, 'grand');
     }
     h += '<div class="section">Expenses</div>';
-    h += row('Operating expenses (books, accrual)', d.expenses.totalFromBooks);
+    h += row('Operating expenses (books, accrual)', d.expenses.totalFromBooks, null, 'expensesBooks');
     if (d.expenses.reimbursements) h += row('Less: reimbursements received', -d.expenses.reimbursements, null, 'reimbursements');
     h += row('Total expenses', d.expenses.net, 'total');
     h += row('Net operating income', d.adjusted ? d.adjusted.noi : d.noi, 'grand');
@@ -308,13 +416,16 @@ async function saveCount() {
 }
 
 async function init() {
-  mountRange((force) => { $('detailCard').style.display = 'none'; detailSeq++; load(force); });
+  mountRange((force) => { $('detailCard').style.display = 'none'; dState = null; detailSeq++; load(force); });
   $('icSave').addEventListener('click', saveCount);
-  $('dClose').addEventListener('click', () => { $('detailCard').style.display = 'none'; detailSeq++; });
+  $('dClose').addEventListener('click', () => { $('detailCard').style.display = 'none'; dState = null; detailSeq++; });
   $('dCsv').addEventListener('click', downloadCsv);
+  $('dBack').addEventListener('click', goBack);
   $('stmt').addEventListener('click', (e) => {
     const el = e.target.closest('.srow.click');
-    if (el) openDetail(el.dataset.key, el.dataset.label.replace(/&amp;/g, '&'));
+    if (!el) return;
+    if (el.dataset.key === 'expensesBooks') openExpenseBreakdown();
+    else openDetail(el.dataset.key, el.dataset.label.replace(/&amp;/g, '&'));
   });
   if (await checkStatus()) { load(false); loadCounts(); }
 }
