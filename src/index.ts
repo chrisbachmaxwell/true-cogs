@@ -276,11 +276,18 @@ async function getBankAccounts(api?: QboApi): Promise<TrackedAccount[]> {
 
 const RETAIL_ACCOUNTS_KEY = 'retail_income_accounts_json';
 
-/** Retail income account(s), e.g. #40100 Retail Sales. Cleared on /callback. */
+/** Income account(s) counted as revenue. QBO_RETAIL_INCOME_ACCOUNTS=all tracks
+ * every Income / Other Income account in the chart. Cleared on /callback. */
 async function getRetailIncomeAccounts(api: QboApi): Promise<TrackedAccount[]> {
   const cached = await getConfigValue(RETAIL_ACCOUNTS_KEY);
   if (cached) return JSON.parse(cached) as TrackedAccount[];
-  const resolved = await resolveAccounts(api, config.retailIncomeAccounts, /sales|income|revenue/i);
+  const wantAll = config.retailIncomeAccounts.length === 1 &&
+    config.retailIncomeAccounts[0].toLowerCase() === 'all';
+  const resolved = wantAll
+    ? (await api.listAccounts()).filter(
+        (a) => a.AccountType === 'Income' || a.AccountType === 'Other Income'
+      )
+    : await resolveAccounts(api, config.retailIncomeAccounts, /sales|income|revenue/i);
   const tracked: TrackedAccount[] = resolved.map((a) => ({
     id: String(a.Id),
     acctNum: a.AcctNum ?? null,
