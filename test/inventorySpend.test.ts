@@ -309,3 +309,38 @@ test('journal entries and deposits touching the account raise warnings, not tota
   assert.match(r.warnings[0], /JournalEntry/);
   assert.match(r.warnings[1], /Deposit/);
 });
+
+test('payments funded from an excluded clearing account are left out and reported', async () => {
+  const bill = { Id: 'B1', TotalAmt: 1000, Line: [expenseLine(MAT_INV, 1000)] };
+  const api = mockApi({
+    billPayments: [
+      {
+        Id: 'BP-real', TxnDate: '2026-06-05', PayType: 'Check',
+        VendorRef: { name: 'Canon' },
+        CheckPayment: { BankAccountRef: { value: 'zions' } },
+        Line: [{ Amount: 600, LinkedTxn: [{ TxnType: 'Bill', TxnId: 'B1' }] }],
+      },
+      {
+        Id: 'BP-ach', TxnDate: '2026-06-06', PayType: 'Check',
+        VendorRef: { name: 'Canon' },
+        CheckPayment: { BankAccountRef: { value: 'ach' } },
+        Line: [{ Amount: 400, LinkedTxn: [{ TxnType: 'Bill', TxnId: 'B1' }] }],
+      },
+    ],
+    purchases: [
+      { Id: 'P-ach', TxnDate: '2026-06-07', PaymentType: 'Check', AccountRef: { value: 'ach' }, Line: [expenseLine(MAT_INV, 250)] },
+      { Id: 'P-real', TxnDate: '2026-06-08', PaymentType: 'Cash', AccountRef: { value: 'zions' }, Line: [expenseLine(MAT_INV, 100)] },
+    ],
+    bills: { B1: bill },
+  });
+  const excl = { excludeFundingAccounts: { ids: new Set(['ach']), label: '"ACH"' } };
+  const r = await computeMonthlySpend(api, MAT_INV, '2026-06', excl);
+  assert.equal(r.total, 700); // 600 real bill payment + 100 real purchase
+  assert.equal(r.excludedFundingTotal, 650); // 400 ACH payment + 250 ACH purchase
+  assert.ok(r.transactions.every((t) => t.txnId !== 'BP-ach' && t.txnId !== 'P-ach'));
+  assert.ok(r.warnings.some((w) => w.includes('Excluded $650.00') && w.includes('ACH')));
+  // Without the option, everything counts and nothing is flagged.
+  const r2 = await computeMonthlySpend(api, MAT_INV, '2026-06');
+  assert.equal(r2.total, 1350);
+  assert.equal(r2.excludedFundingTotal, 0);
+});

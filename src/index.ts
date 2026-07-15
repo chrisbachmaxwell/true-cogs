@@ -3,7 +3,7 @@ import path from 'path';
 import { config, missingQboConfig } from './config';
 import { initDb, getConfigValue, setConfigValue, getCachedMonth, setCachedMonth, getPool } from './db';
 import { buildAuthUri, handleCallback, createQboApi, connectionStatus, QboApi } from './qbo';
-import { computeMonthlySpend, MonthlySpendResult } from './inventorySpend';
+import { computeMonthlySpend, MonthlySpendResult, SpendOptions } from './inventorySpend';
 import { computeMonthlyPnl, MonthlyPnl, PnlContext } from './pnl';
 import { computePnlDetail, expenseAccountDetail, DetailRow } from './pnlDetail';
 import { computeCashFlow, reportBalances } from './cashflow';
@@ -287,10 +287,12 @@ async function getMonthlySpend(
   forceRefresh: boolean,
   accountsParam?: unknown
 ): Promise<MonthlySpendResult> {
-  const tracked = await getTrackedAccounts();
+  const api = await getComputeApi();
+  const tracked = await getTrackedAccounts(api);
   const { ids, viewKey } = selectAccounts(accountsParam, tracked);
+  const { opts, cachePrefix } = await getSpendOpts(api);
   // 'all' keeps the bare-month key so pre-view cache rows stay valid.
-  const cacheKey = viewKey === 'all' ? month : `${month}:${viewKey}`;
+  const cacheKey = cachePrefix + (viewKey === 'all' ? month : `${month}:${viewKey}`);
 
   if (!forceRefresh) {
     const cached = await getCachedMonth(cacheKey);
@@ -303,8 +305,7 @@ async function getMonthlySpend(
     if (inFlight) return inFlight;
   }
   const promise = (async () => {
-    const api = await getComputeApi();
-    const result = await computeMonthlySpend(api, ids, month);
+    const result = await computeMonthlySpend(api, ids, month, opts);
     await setCachedMonth(cacheKey, result);
     return result;
   })().finally(() => inFlightMonths.delete(cacheKey));
@@ -426,6 +427,48 @@ async function getDirectCostAccounts(api: QboApi): Promise<TrackedAccount[]> {
   return tracked;
 }
 
+const EXCLUDED_FUNDING_KEY = 'excluded_funding_accounts_json';
+
+/** Pseudo-bank accounts whose payments are excluded from cash spend math
+ * (QBO_EXCLUDED_FUNDING_ACCOUNTS, e.g. the unreconciled "ACH" clearing
+ * account). Tolerant resolution — a miss disables the exclusion with a log. */
+async function getExcludedFundingAccounts(api: QboApi): Promise<TrackedAccount[]> {
+  if (!config.excludedFundingAccounts.length) return [];
+  const cached = readAccountCache(await getConfigValue(EXCLUDED_FUNDING_KEY), config.excludedFundingAccounts);
+  if (cached) return cached;
+  let tracked: TrackedAccount[] = [];
+  try {
+    const resolved = await resolveAccounts(api, config.excludedFundingAccounts, /ach|clearing/i);
+    tracked = resolved.map((a) => ({ id: String(a.Id), acctNum: a.AcctNum ?? null, name: a.Name }));
+  } catch (err: any) {
+    console.warn('[qbo] excluded-funding account resolution failed:', err.message);
+    return [];
+  }
+  await setConfigValue(
+    EXCLUDED_FUNDING_KEY,
+    JSON.stringify({ tokens: config.excludedFundingAccounts, accounts: tracked })
+  );
+  console.log(`[qbo] excluding payments funded from: ${tracked.map((t) => t.name).join(', ')}`);
+  return tracked;
+}
+
+/** Spend options shared by every cash computation, plus a cache-key prefix so
+ * results computed under an exclusion never mix with unexcluded caches (and
+ * vice versa when the setting is removed after the books are repaired). */
+async function getSpendOpts(api: QboApi): Promise<{ opts: SpendOptions; cachePrefix: string }> {
+  const excluded = await getExcludedFundingAccounts(api);
+  if (!excluded.length) return { opts: {}, cachePrefix: '' };
+  return {
+    opts: {
+      excludeFundingAccounts: {
+        ids: new Set(excluded.map((t) => t.id)),
+        label: excluded.map((t) => `"${t.name}"`).join(', '),
+      },
+    },
+    cachePrefix: 'xf:' + excluded.map((t) => t.id).sort().join('+') + ':',
+  };
+}
+
 const TAX_ACCOUNTS_KEY = 'sales_tax_accounts_json';
 
 /** Sales-tax liability account(s), e.g. #21900. Resolution failure downgrades
@@ -453,7 +496,7 @@ async function getSalesTaxRemitted(api: QboApi, month: string): Promise<{ amount
   const taxAccounts = await getSalesTaxAccounts(api);
   if (!taxAccounts.length) return { amount: 0, source: 'none' };
   const taxIds = taxAccounts.map((t) => t.id);
-  const spend = await computeMonthlySpend(api, taxIds, month);
+  const spend = await computeMonthlySpend(api, taxIds, month, (await getSpendOpts(api)).opts);
   if (spend.total > 0) return { amount: spend.total, source: 'transactions' };
   try {
     const { start, end } = monthDateRange(month);
@@ -472,7 +515,8 @@ async function getSalesTaxRemitted(api: QboApi, month: string): Promise<{ amount
 const inFlightPnl = new Map<string, Promise<MonthlyPnl>>();
 
 async function getMonthlyPnl(month: string, forceRefresh: boolean): Promise<MonthlyPnl> {
-  const cacheKey = `pnl:${month}`;
+  const { opts: spendOpts, cachePrefix } = await getSpendOpts(await getComputeApi());
+  const cacheKey = `${cachePrefix}pnl:${month}`;
   if (!forceRefresh) {
     const cached = await getCachedMonth(cacheKey);
     if (cached) {
@@ -489,7 +533,7 @@ async function getMonthlyPnl(month: string, forceRefresh: boolean): Promise<Mont
     const tax = await getSalesTaxRemitted(api, month);
     const directIds = (await getDirectCostAccounts(api)).map((t) => t.id);
     const directCosts = directIds.length
-      ? (await computeMonthlySpend(api, directIds, month)).total
+      ? (await computeMonthlySpend(api, directIds, month, spendOpts)).total
       : 0;
     const result = await computeMonthlyPnl(
       api,
@@ -920,7 +964,8 @@ async function getPnlCtx(api: QboApi): Promise<PnlContext & { accountNames: Map<
  * section pulled from the books' accrual P&L for the same period. Cached like
  * the other range endpoints; also the data source for /api/checks. */
 async function getStatement(range: { start: string; end: string }, force: boolean): Promise<any> {
-  const cacheKey = `stmt:${range.start}:${range.end}`;
+  const { opts: spendOpts, cachePrefix } = await getSpendOpts(await getComputeApi());
+  const cacheKey = `${cachePrefix}stmt:${range.start}:${range.end}`;
   if (!force) {
     const cached = await getCachedMonth(cacheKey);
     const closed = range.end < new Date().toISOString().slice(0, 10);
@@ -931,11 +976,11 @@ async function getStatement(range: { start: string; end: string }, force: boolea
   return dedupe(cacheKey, async () => {
       const api = await getComputeApi();
       const inventoryIds = (await getTrackedAccounts(api)).map((t) => t.id);
-      const spend = await computeMonthlySpend(api, inventoryIds, range);
+      const spend = await computeMonthlySpend(api, inventoryIds, range, spendOpts);
       const taxIds = (await getSalesTaxAccounts(api)).map((t) => t.id);
-      const taxRemitted = taxIds.length ? (await computeMonthlySpend(api, taxIds, range)).total : 0;
+      const taxRemitted = taxIds.length ? (await computeMonthlySpend(api, taxIds, range, spendOpts)).total : 0;
       const directIds = (await getDirectCostAccounts(api)).map((t) => t.id);
-      const directCosts = directIds.length ? (await computeMonthlySpend(api, directIds, range)).total : 0;
+      const directCosts = directIds.length ? (await computeMonthlySpend(api, directIds, range, spendOpts)).total : 0;
       const pnl = await computeMonthlyPnl(
         api,
         await getPnlCtx(api),
@@ -944,6 +989,8 @@ async function getStatement(range: { start: string; end: string }, force: boolea
         taxRemitted,
         directCosts
       );
+      // Surface the funding-account exclusion on the statement itself.
+      for (const w of spend.warnings) if (w.startsWith('Excluded $')) pnl.warnings.push(w);
       // Operating expenses come from the books' accrual P&L for the same period.
       // Row ids (when the report provides them) let the UI drill into an account.
       let expenses: { total: number; rows: { name: string; amount: number; id: string | null }[] } = { total: 0, rows: [] };
@@ -1100,13 +1147,14 @@ app.get(
         }));
       const result = await dedupe(`dt:${line}:${range.start}:${range.end}`, async () => {
         const api = await getComputeApi();
+        const { opts: spendOpts } = await getSpendOpts(api);
         // Direct costs group by cost category (freight / repairs / materials):
         // one compute per account so every row knows which account it hit.
         if (line === 'directCosts' && accounts.length > 1) {
           const rows: DetailRow[] = [];
           let sum = 0;
           for (const a of accounts) {
-            const spend = await computeMonthlySpend(api, [a.id], range);
+            const spend = await computeMonthlySpend(api, [a.id], range, spendOpts);
             sum += spend.total;
             rows.push(...toRows(spend, () => `${a.acctNum ? `#${a.acctNum} ` : ''}${a.name}`));
           }
@@ -1114,7 +1162,7 @@ app.get(
           return { rows, sum: Math.round(sum * 100) / 100 };
         }
         // Inventory and tax group by payee.
-        const spend = await computeMonthlySpend(api, accounts.map((a) => a.id), range);
+        const spend = await computeMonthlySpend(api, accounts.map((a) => a.id), range, spendOpts);
         return { rows: toRows(spend, (t) => t.vendor), sum: spend.total };
       });
       const note =
@@ -1208,6 +1256,7 @@ app.get(
         start: range.start,
         end: range.end,
         total: spend.total,
+        note: 'Diagnostic view — funding-account exclusions are deliberately NOT applied here, so excluded accounts remain visible.',
         byFundingAccount: [...by.entries()]
           .map(([id, v]) => ({ id, ...v, amount: Math.round(v.amount * 100) / 100 }))
           .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount)),

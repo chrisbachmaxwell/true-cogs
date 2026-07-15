@@ -17,6 +17,11 @@ export interface AppConfig {
   /** Sales-tax liability account(s): remittances to them are deducted from
    * revenue, because the POS sync books tax-inclusive amounts into income. */
   salesTaxAccounts: string[];
+  /** Pseudo-bank accounts whose payments are EXCLUDED from all cash spend math
+   * (e.g. the unreconciled "ACH" clearing account whose Jul 2024 – Dec 2025
+   * bill payments duplicate real bank payments). Statements show what was
+   * excluded. Remove once the books are repaired. */
+  excludedFundingAccounts: string[];
   /** Seeds the first admin when the users table is empty. Auth is enforced
    * whenever at least one user exists. */
   adminEmail: string | undefined;
@@ -52,6 +57,10 @@ export const config: AppConfig = {
     .map((s) => s.trim())
     .filter(Boolean),
   salesTaxAccounts: (process.env.QBO_SALES_TAX_ACCOUNTS || '21900')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
+  excludedFundingAccounts: (process.env.QBO_EXCLUDED_FUNDING_ACCOUNTS || '')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean),

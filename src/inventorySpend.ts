@@ -44,9 +44,17 @@ export interface MonthlySpendResult {
   bookedTotal: number;
   /** Informational only — already reflected in Bucket 1 net payment amounts. */
   vendorCreditsApplied: number;
+  /** Spend skipped because it was drawn from an excluded pseudo-bank account. */
+  excludedFundingTotal: number;
   transactions: SpendTransaction[];
   /** e.g. JournalEntries/Deposits touching the account outside the Bill/Purchase flow. */
   warnings: string[];
+}
+
+/** Payments drawn from these accounts are left out of the cash math — used for
+ * unreconciled clearing accounts whose entries duplicate real bank payments. */
+export interface SpendOptions {
+  excludeFundingAccounts?: { ids: Set<string>; label: string };
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -102,8 +110,11 @@ export function monthDateRange(month: string): { start: string; end: string } {
 export async function computeMonthlySpend(
   api: QboApi,
   inventoryAccountIds: AccountIds,
-  monthOrRange: string | { start: string; end: string }
+  monthOrRange: string | { start: string; end: string },
+  opts: SpendOptions = {}
 ): Promise<MonthlySpendResult> {
+  const excludedIds = opts.excludeFundingAccounts?.ids;
+  let excludedFundingTotal = 0;
   const accountIdList = Array.isArray(inventoryAccountIds) ? inventoryAccountIds : [inventoryAccountIds];
   const accountIdSet = new Set(accountIdList);
   const { start, end } =
@@ -160,6 +171,10 @@ export async function computeMonthlySpend(
       const attributed = round2((Number(line.Amount) || 0) * inventoryRatio);
       if (attributed === 0) continue;
 
+      if (excludedIds && fundingAccountId && excludedIds.has(String(fundingAccountId))) {
+        excludedFundingTotal += attributed;
+        continue;
+      }
       bucket1Total += attributed;
       console.log(
         `[spend ${month}] BillPayment ${bp.Id} → Bill ${linkedBill.TxnId}: ` +
@@ -193,6 +208,10 @@ export async function computeMonthlySpend(
     if (inventoryPortion <= 0) continue;
     const sign = purchase.Credit === true ? -1 : 1;
     const amount = round2(sign * inventoryPortion);
+    if (excludedIds && purchase.AccountRef?.value && excludedIds.has(String(purchase.AccountRef.value))) {
+      excludedFundingTotal += amount;
+      continue;
+    }
     bucket2Total += amount;
     purchaseBooked += amount;
     transactions.push({
@@ -247,6 +266,14 @@ export async function computeMonthlySpend(
 
   transactions.sort((a, b) => a.date.localeCompare(b.date));
 
+  if (excludedFundingTotal !== 0 && opts.excludeFundingAccounts) {
+    warnings.push(
+      `Excluded $${round2(excludedFundingTotal).toFixed(2)} of payments recorded from ` +
+        `${opts.excludeFundingAccounts.label} — an unreconciled clearing account whose entries ` +
+        `duplicate real bank payments. Remove QBO_EXCLUDED_FUNDING_ACCOUNTS once the books are repaired.`
+    );
+  }
+
   return {
     month,
     startDate: start,
@@ -256,6 +283,7 @@ export async function computeMonthlySpend(
     bucket2Total: round2(bucket2Total),
     bookedTotal,
     vendorCreditsApplied: round2(vendorCreditsApplied),
+    excludedFundingTotal: round2(excludedFundingTotal),
     transactions,
     warnings,
   };
