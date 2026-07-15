@@ -135,9 +135,23 @@ async function resolveAccounts(api: QboApi, tokens: string[], hint: RegExp): Pro
 
 /** Tracked accounts, resolved once and stored so cache keys and view filters
  * work without hitting QuickBooks. Cleared on /callback. */
+/** Reads a cached account resolution, invalidating it when the configured
+ * token list has changed since it was stored (env var edits apply on deploy). */
+function readAccountCache(raw: string | null, tokens: string[]): TrackedAccount[] | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return null; // legacy shape without tokens — re-resolve
+    if (JSON.stringify(parsed.tokens) !== JSON.stringify(tokens)) return null;
+    return parsed.accounts as TrackedAccount[];
+  } catch {
+    return null;
+  }
+}
+
 async function getTrackedAccounts(api?: QboApi): Promise<TrackedAccount[]> {
-  const cached = await getConfigValue(ACCOUNTS_KEY);
-  if (cached) return JSON.parse(cached) as TrackedAccount[];
+  const cached = readAccountCache(await getConfigValue(ACCOUNTS_KEY), config.inventoryAccounts);
+  if (cached) return cached;
   const resolved = await resolveAccounts(
     api ?? (await createQboApi()),
     config.inventoryAccounts,
@@ -148,7 +162,7 @@ async function getTrackedAccounts(api?: QboApi): Promise<TrackedAccount[]> {
     acctNum: a.AcctNum ?? null,
     name: a.Name,
   }));
-  await setConfigValue(ACCOUNTS_KEY, JSON.stringify(tracked));
+  await setConfigValue(ACCOUNTS_KEY, JSON.stringify({ tokens: config.inventoryAccounts, accounts: tracked }));
   console.log(
     `[qbo] resolved inventory accounts: ${tracked.map((t) => `${t.name} (#${t.acctNum || '?'} → Id ${t.id})`).join(', ')}`
   );
@@ -279,8 +293,8 @@ const RETAIL_ACCOUNTS_KEY = 'retail_income_accounts_json';
 /** Income account(s) counted as revenue. QBO_RETAIL_INCOME_ACCOUNTS=all tracks
  * every Income / Other Income account in the chart. Cleared on /callback. */
 async function getRetailIncomeAccounts(api: QboApi): Promise<TrackedAccount[]> {
-  const cached = await getConfigValue(RETAIL_ACCOUNTS_KEY);
-  if (cached) return JSON.parse(cached) as TrackedAccount[];
+  const cached = readAccountCache(await getConfigValue(RETAIL_ACCOUNTS_KEY), config.retailIncomeAccounts);
+  if (cached) return cached;
   const wantAll = config.retailIncomeAccounts.length === 1 &&
     config.retailIncomeAccounts[0].toLowerCase() === 'all';
   const resolved = wantAll
@@ -293,7 +307,7 @@ async function getRetailIncomeAccounts(api: QboApi): Promise<TrackedAccount[]> {
     acctNum: a.AcctNum ?? null,
     name: a.Name,
   }));
-  await setConfigValue(RETAIL_ACCOUNTS_KEY, JSON.stringify(tracked));
+  await setConfigValue(RETAIL_ACCOUNTS_KEY, JSON.stringify({ tokens: config.retailIncomeAccounts, accounts: tracked }));
   console.log(
     `[qbo] retail income accounts: ${tracked.map((t) => `${t.name} (#${t.acctNum || '?'} → Id ${t.id})`).join(', ')}`
   );
