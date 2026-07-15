@@ -50,9 +50,11 @@
 <script src="/app.js"></script>
 <script>
 async function load() {
+  const fresh = staleGuard();
   setLoading(true);
   try {
     const d = await jfetch('/api/pnl-statement?' + Range.qs());
+    if (!fresh()) return;
     $('kRev').textContent = usd.format(d.income.netRevenue);
     $('kCogs').textContent = usd.format(d.cogs.total);
     $('kGp').textContent = usd.format(d.grossProfit);

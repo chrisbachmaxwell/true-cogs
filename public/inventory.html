@@ -109,10 +109,12 @@ async function loadTransactions() {
 }
 
 async function load() {
+  const fresh = staleGuard();
   setLoading(true);
   try {
     const months = monthsInRange();
     const d = await jfetch('/api/summary?start=' + months[0] + '&end=' + months[months.length - 1]);
+    if (!fresh()) return;
     renderChart(d.months);
   } catch (err) {
     if (err.message !== 'signed out') showBanner('<strong>Error.</strong> ' + escapeHtml(err.message));

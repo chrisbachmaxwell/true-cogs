@@ -54,9 +54,11 @@ function row(label, value, cls) {
   return '<div class="srow' + (cls ? ' ' + cls : '') + '"><span>' + label + '</span><span class="num' + negClass + '">' + usd2.format(value) + '</span></div>';
 }
 async function load(force) {
+  const fresh = staleGuard();
   setLoading(true);
   try {
     const d = await jfetch('/api/pnl-statement?' + Range.qs() + (force ? '&refresh=1' : ''));
+    if (!fresh()) return;
     let h = '';
     h += '<div class="section">Income</div>';
     h += row('Money in — bank-verified customer cash', d.income.moneyIn);
@@ -85,9 +87,6 @@ async function load(force) {
     if (d.expenses.reimbursements) h += row('Less: reimbursements received', -d.expenses.reimbursements);
     h += row('Total expenses', d.expenses.net, 'total');
     h += row('Net operating income', d.adjusted ? d.adjusted.noi : d.noi, 'grand');
-    if (d.adjusted) {
-      h += row('Memo: cash-basis NOI (before inventory adjustment)', d.noi, 'sub');
-    }
     $('stmt').innerHTML = h;
     const w = $('warnings');
     w.innerHTML = '';

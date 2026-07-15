@@ -35,9 +35,11 @@
 <script src="/app.js"></script>
 <script>
 async function load(force) {
+  const fresh = staleGuard();
   setLoading(true);
   try {
     const d = await jfetch('/api/cash-flow?' + Range.qs() + (force ? '&refresh=1' : ''));
+    if (!fresh()) return;
     const el = $('kBank');
     el.textContent = (d.bankChange >= 0 ? '+' : '') + usd.format(d.bankChange);
     el.classList.toggle('neg', d.bankChange < 0);

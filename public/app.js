@@ -105,6 +105,15 @@ async function jfetch(url) {
   return data;
 }
 
+/* Guards against out-of-order async renders: when the range changes, responses
+ * from superseded requests must never paint the page. Usage:
+ *   const fresh = staleGuard();  ...await...  if (!fresh()) return; */
+let __loadSeq = 0;
+function staleGuard() {
+  const my = ++__loadSeq;
+  return () => my === __loadSeq;
+}
+
 function showBanner(html) {
   const b = $('banner');
   if (!b) return;

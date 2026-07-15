@@ -38,9 +38,11 @@ function row(label, value, cls) {
   return '<div class="srow' + (cls ? ' ' + cls : '') + '"><span>' + label + '</span><span class="num' + (value < 0 ? ' neg' : '') + '">' + usd2.format(value) + '</span></div>';
 }
 async function load(force) {
+  const fresh = staleGuard();
   setLoading(true);
   try {
     const d = await jfetch('/api/bank-flow?' + Range.qs() + (force ? '&refresh=1' : ''));
+    if (!fresh()) return;
     let h = '<div class="section">Money in</div>';
     h += row('Deposits into bank', d.inflows.deposits);
     h += row('Receipts/payments straight to bank', d.inflows.directSalesReceipts + d.inflows.directInvoicePayments);
