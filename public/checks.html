@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Checks · Pictureline</title>
+<link rel="stylesheet" href="/theme.css">
+<style>
+  .check { display: flex; gap: 14px; padding: 14px 6px; border-bottom: 1px solid var(--hairline); align-items: flex-start; }
+  .check:last-child { border-bottom: 0; }
+  .c-icon { font-size: 18px; line-height: 1.3; width: 24px; text-align: center; flex: none; }
+  .check.pass .c-icon { color: #34c759; }
+  .check.warn .c-icon { color: #ff9f0a; }
+  .check.fail .c-icon { color: var(--bad); }
+  .c-name { font-weight: 600; font-size: 14px; }
+  .c-vals { color: var(--ink-2); font-size: 13px; margin-top: 3px; }
+  .c-explain { color: var(--ink-2); font-size: 13px; margin-top: 5px; }
+  .c-link { font-size: 13px; margin-top: 5px; display: inline-block; color: var(--accent); text-decoration: none; }
+  .c-link:hover { text-decoration: underline; }
+  .scorecard { display: flex; gap: 10px; margin-top: 22px; }
+  .score { flex: 1; text-align: center; background: var(--surface); border: 1px solid var(--hairline); border-radius: 14px; padding: 14px; }
+  .score b { display: block; font-size: 26px; }
+  .score.pass b { color: #34c759; } .score.warn b { color: #ff9f0a; } .score.fail b { color: var(--bad); }
+  .score span { color: var(--ink-2); font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="topbar"><div class="topbar-inner">
+  <a class="brand" href="/">Pictureline <span>Cash Reports</span></a>
+  <a class="crumb" id="backLink" href="/">← All reports</a>
+  <div class="spacer"></div>
+  <a class="crumb" href="/auth/logout">Sign out</a>
+</div></div>
+
+<div class="wrap">
+  <h1 class="title">Checks</h1>
+  <p class="subtitle">Automatic tie-outs that prove the numbers reconcile · <span id="rangeLabel"></span></p>
+  <div id="rangeBox"></div>
+  <div class="banner" id="banner"></div>
+
+  <div class="scorecard">
+    <div class="score pass"><b id="nPass">—</b><span>passing</span></div>
+    <div class="score warn"><b id="nWarn">—</b><span>needs a look</span></div>
+    <div class="score fail"><b id="nFail">—</b><span>failing</span></div>
+  </div>
+
+  <div class="card">
+    <div id="list"><div class="empty">Running checks… a fresh range can take a minute; cached ranges are quick.</div></div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+<script>
+const ICON = { pass: '✓', warn: '⚠', fail: '✗' };
+function fmt(v) {
+  if (v === null || v === undefined) return '—';
+  return typeof v === 'number' ? usd2.format(v) : String(v);
+}
+async function load(force) {
+  const fresh = staleGuard();
+  setLoading(true);
+  try {
+    const d = await jfetch('/api/checks?' + Range.qs() + (force ? '&refresh=1' : ''));
+    if (!fresh()) return;
+    $('nPass').textContent = d.counts.pass;
+    $('nWarn').textContent = d.counts.warn;
+    $('nFail').textContent = d.counts.fail;
+    const box = $('list');
+    box.innerHTML = '';
+    const order = { fail: 0, warn: 1, pass: 2 };
+    for (const c of d.checks.slice().sort((a, b) => order[a.status] - order[b.status])) {
+      const div = document.createElement('div');
+      div.className = 'check ' + c.status;
+      div.innerHTML =
+        '<div class="c-icon">' + ICON[c.status] + '</div>' +
+        '<div><div class="c-name">' + escapeHtml(c.name) + '</div>' +
+        '<div class="c-vals">Expected: ' + escapeHtml(fmt(c.expected)) + ' · Measured: ' + escapeHtml(fmt(c.actual)) + '</div>' +
+        '<div class="c-explain">' + escapeHtml(c.explain) + '</div>' +
+        (c.link ? '<a class="c-link" href="' + c.link + '">Investigate →</a>' : '') +
+        '</div>';
+      box.appendChild(div);
+    }
+  } catch (err) {
+    if (err.message !== 'signed out') showBanner('<strong>Error.</strong> ' + escapeHtml(err.message));
+  } finally {
+    setLoading(false);
+  }
+  $('backLink').href = linkWithRange('/');
+}
+async function init() {
+  mountRange((force) => load(force));
+  if (await checkStatus()) load(false);
+}
+init();
+</script>
+</body>
+</html>

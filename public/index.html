@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pictureline · Cash Reports</title>
+<link rel="stylesheet" href="/theme.css">
+</head>
+<body>
+<div class="topbar"><div class="topbar-inner">
+  <a class="brand" href="/">Pictureline <span>Cash Reports</span></a>
+  <div class="spacer"></div>
+  <a class="crumb" id="envLine" href="/api/status">…</a>
+  <a class="crumb" id="usersLink" href="/users" style="display:none">Users</a>
+  <a class="crumb" id="pwLink" href="/password" style="display:none">Password</a>
+  <a class="crumb" href="/auth/logout">Sign out</a>
+</div></div>
+
+<div class="wrap">
+  <h1 class="title">Reports</h1>
+  <p class="subtitle">Cash-verified financials · <span id="rangeLabel"></span></p>
+  <div id="rangeBox"></div>
+  <div class="banner" id="banner"></div>
+
+  <div class="kpis" style="margin-top:22px">
+    <div class="kpi"><div class="k-label">Net revenue</div><div class="k-value" id="kRev">—</div><div class="k-note">Cash received, net of sales tax</div></div>
+    <div class="kpi"><div class="k-label">Total COGS</div><div class="k-value" id="kCogs">—</div><div class="k-note" id="kCogsNote">—</div></div>
+    <div class="kpi"><div class="k-label">Gross profit</div><div class="k-value" id="kGp">—</div><div class="k-note" id="kGpNote">—</div></div>
+    <div class="kpi"><div class="k-label">NOI</div><div class="k-value" id="kNoi">—</div><div class="k-note">After expenses from the books</div></div>
+  </div>
+
+  <div class="tiles" style="margin-top:22px">
+    <a class="tile" id="lnkPnl" href="/pnl">
+      <div class="icon blue">▤</div>
+      <div><div class="t-name">Profit &amp; Loss</div><div class="t-desc">Full cash P&amp;L statement — income, COGS, expenses, NOI</div></div>
+    </a>
+    <a class="tile" id="lnkBank" href="/bank">
+      <div class="icon green">⇅</div>
+      <div><div class="t-name">Bank Reconciliation</div><div class="t-desc">Money in vs money out, tied to actual bank change</div></div>
+    </a>
+    <a class="tile" id="lnkCash" href="/cashflow">
+      <div class="icon purple">◔</div>
+      <div><div class="t-name">Where the Cash Went</div><div class="t-desc">Balance-sheet movements — inventory, cards, taxes, owners</div></div>
+    </a>
+    <a class="tile" id="lnkInv" href="/inventory">
+      <div class="icon orange">▥</div>
+      <div><div class="t-name">Inventory &amp; COGS</div><div class="t-desc">Monthly trend and transaction-level audit, by location</div></div>
+    </a>
+    <a class="tile" id="lnkChecks" href="/checks">
+      <div class="icon green">✓</div>
+      <div><div class="t-name">Checks</div><div class="t-desc">Automatic tie-outs — income vs bank, tax vs ledger, drill-down sums</div></div>
+    </a>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+<script>
+async function load() {
+  const fresh = staleGuard();
+  setLoading(true);
+  try {
+    const d = await jfetch('/api/pnl-statement?' + Range.qs());
+    if (!fresh()) return;
+    // Same numbers as the P&L page: accounting basis whenever inventory
+    // counts cover the range, cash basis (labeled) only as a fallback.
+    const cogs = d.adjusted ? d.adjusted.cogsTotal : d.cogs.total;
+    const gp = d.adjusted ? d.adjusted.grossProfit : d.grossProfit;
+    const margin = d.adjusted ? d.adjusted.grossMarginPct : d.grossMarginPct;
+    const noi = d.adjusted ? d.adjusted.noi : d.noi;
+    $('kRev').textContent = usd.format(d.income.netRevenue);
+    $('kCogs').textContent = usd.format(cogs);
+    $('kCogsNote').textContent = d.adjusted
+      ? 'Accounting basis (counts ' + d.adjusted.beginAsOf + ' → ' + d.adjusted.endAsOf + ')'
+      : 'Cash basis — no inventory counts for this range';
+    $('kGp').textContent = usd.format(gp);
+    $('kGp').classList.toggle('neg', gp < 0);
+    $('kGpNote').textContent = margin !== null ? margin.toFixed(1) + '% margin' : '—';
+    $('kNoi').textContent = usd.format(noi);
+    $('kNoi').classList.toggle('neg', noi < 0);
+  } catch (err) {
+    if (err.message !== 'signed out') showBanner('<strong>Error.</strong> ' + escapeHtml(err.message));
+  } finally {
+    setLoading(false);
+  }
+  for (const [id, path] of [['lnkPnl','/pnl'],['lnkBank','/bank'],['lnkCash','/cashflow'],['lnkInv','/inventory'],['lnkChecks','/checks']]) {
+    $(id).href = linkWithRange(path);
+  }
+}
+async function init() {
+  mountRange(() => load());
+  const s = await checkStatus();
+  if (s) {
+    $('envLine').textContent = s.environment === 'production' ? 'QuickBooks · production' : 'QuickBooks · sandbox';
+    load();
+  }
+  try {
+    const me = await (await fetch('/auth/me')).json();
+    if (me.enabled && me.user) {
+      $('pwLink').style.display = '';
+      if (me.user.isAdmin) $('usersLink').style.display = '';
+    }
+  } catch (e) { /* non-fatal */ }
+}
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,435 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Profit &amp; Loss · Pictureline</title>
+<link rel="stylesheet" href="/theme.css">
+<style>
+  .srow.click { cursor: pointer; border-radius: 8px; }
+  .srow.click:hover { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+  .srow.click > span:first-child::after { content: ' ›'; color: var(--ink-3); }
+  .dhead { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .dhead h2 { margin-right: auto; }
+  .dcheck { margin-top: 12px; padding: 10px 12px; border-radius: 10px; font-size: 13px; }
+  .dcheck.ok { background: color-mix(in srgb, #34c759 12%, transparent); color: var(--ink); }
+  .dcheck.bad { background: color-mix(in srgb, var(--bad) 12%, transparent); color: var(--ink); }
+  .dnote { margin-top: 10px; color: var(--ink-2); font-size: 13px; }
+  .qlink { color: var(--accent); text-decoration: none; }
+  .qlink:hover { text-decoration: underline; }
+  tr.exp-click { cursor: pointer; }
+  tr.exp-click:hover td { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+</style>
+</head>
+<body>
+<div class="topbar"><div class="topbar-inner">
+  <a class="brand" href="/">Pictureline <span>Cash Reports</span></a>
+  <a class="crumb" id="backLink" href="/">← All reports</a>
+  <div class="spacer"></div>
+  <a class="crumb" href="/auth/logout">Sign out</a>
+</div></div>
+
+<div class="wrap">
+  <h1 class="title">Profit &amp; Loss</h1>
+  <p class="subtitle">Accounting principles, cash-verified · click any amount to see the transactions behind it · <span id="rangeLabel"></span></p>
+  <div id="rangeBox"></div>
+  <div class="banner" id="banner"></div>
+
+  <div class="card" style="margin-top:22px">
+    <div class="stmt" id="stmt"><div class="empty">Loading…</div></div>
+    <div class="warnings" id="warnings"></div>
+  </div>
+
+  <div class="card" id="detailCard" style="display:none">
+    <div class="dhead">
+      <h2 id="dTitle"></h2>
+      <button class="btn" id="dBack" style="display:none">← Categories</button>
+      <button class="btn" id="dCsv">Download CSV</button>
+      <button class="btn" id="dClose">Close</button>
+    </div>
+    <div style="overflow-x:auto"><table>
+      <thead id="dHead"></thead>
+      <tbody id="dRows"></tbody>
+    </table></div>
+    <div class="dcheck" id="dCheck" style="display:none"></div>
+    <div class="dnote" id="dNote"></div>
+  </div>
+
+  <div class="card">
+    <h2>Inventory counts <span class="hint">— physical values (all locations); the statement uses the counts nearest your range</span></h2>
+    <div class="range" style="margin-bottom:14px">
+      <input type="date" id="icDate">
+      <input type="text" id="icValue" placeholder="Total inventory value, e.g. 3264289.74" style="font:inherit;font-size:13px;color:var(--ink);background:var(--surface);border:1px solid var(--hairline);border-radius:10px;padding:7px 11px;width:260px">
+      <button class="btn primary" id="icSave">Save count</button>
+    </div>
+    <div style="overflow-x:auto"><table>
+      <thead><tr><th>As of</th><th class="num">Value</th><th></th></tr></thead>
+      <tbody id="icRows"></tbody>
+    </table></div>
+  </div>
+
+  <div class="card">
+    <h2>Operating expenses <span class="hint">— from the books (accrual), largest first · click an account to see its transactions</span></h2>
+    <div style="overflow-x:auto"><table>
+      <thead><tr><th>Expense</th><th class="num">Amount</th></tr></thead>
+      <tbody id="expRows"></tbody>
+    </table></div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+<script>
+let stmtData = null;
+let detailSeq = 0;
+
+// Deep links into QuickBooks so the source document can be inspected.
+const QBO_PATH = {
+  BillPayment: 'billpayment', Bill: 'bill', Check: 'check', Purchase: 'expense',
+  Deposit: 'deposit', Payment: 'recvpayment', SalesReceipt: 'salesreceipt',
+  RefundReceipt: 'refundreceipt', JournalEntry: 'journal', VendorCredit: 'vendorcredit',
+  Transfer: 'transfer', CreditMemo: 'creditmemo',
+};
+function qboLink(type, id) {
+  const p = QBO_PATH[type];
+  if (!p || !id) return null;
+  return 'https://qbo.intuit.com/app/' + p + '?txnId=' + encodeURIComponent(id);
+}
+
+function row(label, value, cls, key) {
+  const negClass = value < 0 ? ' neg' : '';
+  const click = key ? ' click' : '';
+  const data = key ? ' data-key="' + key + '" data-label="' + label.replace(/"/g, '&quot;') + '"' : '';
+  return '<div class="srow' + (cls ? ' ' + cls : '') + click + '"' + data + '><span>' + label +
+    '</span><span class="num' + negClass + '">' + usd2.format(value) + '</span></div>';
+}
+
+// The value each drill-down's transaction list must sum to.
+function expectedFor(key) {
+  const d = stmtData;
+  if (!d) return null;
+  switch (key) {
+    case 'deposits': return d.income.deposits;
+    case 'invoicePayments': return d.income.invoicePayments;
+    case 'salesReceipts': return d.income.salesReceipts;
+    case 'refunds': return d.income.refunds;
+    case 'salesTax': return d.income.salesTaxRemitted;
+    case 'inventory': return d.cogs.inventoryCash;
+    case 'inventoryChange': return d.adjusted ? d.adjusted.inventoryChange : null;
+    case 'directCosts': return d.cogs.directCosts;
+    case 'rebates': return d.cogs.rebateOffsets;
+    case 'reimbursements': return d.expenses.reimbursements;
+    default: return null;
+  }
+}
+
+// Two-level drill-down state: level 1 groups rows by category (account,
+// vendor, or customer); clicking a category shows its transactions.
+let dState = null; // { label, rows, groups, mode: 'groups'|'rows', group, expected, note, kind }
+
+function showPanel(title) {
+  const card = $('detailCard');
+  card.style.display = '';
+  $('dTitle').textContent = title;
+  $('dHead').innerHTML = '';
+  $('dRows').innerHTML = '<tr><td colspan="4" class="empty">Loading…</td></tr>';
+  $('dCheck').style.display = 'none';
+  $('dBack').style.display = 'none';
+  $('dNote').textContent = '';
+  card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function groupRows(rows) {
+  const by = new Map();
+  for (const r of rows) {
+    const key = r.group || r.name || '—';
+    const g = by.get(key) || { group: key, count: 0, amount: 0 };
+    g.count++;
+    g.amount += r.amount;
+    by.set(key, g);
+  }
+  return [...by.values()]
+    .map((g) => ({ ...g, amount: Math.round(g.amount * 100) / 100 }))
+    .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+}
+
+async function openDetail(key, label) {
+  const my = ++detailSeq;
+  showPanel(label);
+  try {
+    const d = await jfetch('/api/pnl-detail?' + Range.qs() + '&line=' + encodeURIComponent(key));
+    if (my !== detailSeq) return;
+    const groups = groupRows(d.rows);
+    dState = {
+      label, rows: d.rows, groups, expected: expectedFor(key), note: d.note,
+      kind: key === 'inventoryChange' ? 'counts' : 'normal',
+      mode: groups.length > 1 && d.rows.length > groups.length ? 'groups' : 'rows',
+      group: null,
+    };
+    renderCurrent();
+  } catch (err) {
+    if (my !== detailSeq) return;
+    if (err.message !== 'signed out') $('dRows').innerHTML = '<tr><td colspan="4" class="empty">Couldn’t load: ' + escapeHtml(err.message) + '</td></tr>';
+  }
+}
+
+// Level 1 for total operating expenses: the books' expense accounts.
+function openExpenseBreakdown() {
+  const rows = (stmtData.expenses.rows || []).map((e) => ({ ...e }));
+  showPanel('Operating expenses — by category');
+  dState = {
+    label: 'Operating expenses', kind: 'expenseCats',
+    rows, groups: rows.map((e) => ({ group: e.name, count: null, amount: e.amount, id: e.id })),
+    expected: stmtData.expenses.totalFromBooks, note: null, mode: 'groups', group: null,
+  };
+  renderCurrent();
+}
+
+// Level 2 for one expense account: its transactions from the mirror.
+async function openExpenseDetail(accountId, name, booksAmount) {
+  const my = ++detailSeq;
+  const cameFromCats = dState && dState.kind === 'expenseCats' ? dState : null;
+  showPanel('Expense — ' + name);
+  try {
+    const d = await jfetch('/api/expense-detail?' + Range.qs() + '&account=' + encodeURIComponent(accountId));
+    if (my !== detailSeq) return;
+    const rows = d.rows.slice();
+    const remainder = Math.round((booksAmount - d.sum) * 100) / 100;
+    if (Math.abs(remainder) > 0.01) {
+      rows.push({
+        date: '', name: 'Not itemizable through the API (payroll, tax-center, or report-only activity) — open the account in QuickBooks to see it',
+        txnType: '', txnId: null, amount: remainder,
+      });
+    }
+    dState = {
+      label: 'Expense — ' + name, rows, groups: [], expected: booksAmount, note: null,
+      kind: 'normal', mode: 'rows', group: null, parent: cameFromCats,
+    };
+    renderCurrent();
+  } catch (err) {
+    if (my !== detailSeq) return;
+    if (err.message !== 'signed out') $('dRows').innerHTML = '<tr><td colspan="4" class="empty">Couldn’t load: ' + escapeHtml(err.message) + '</td></tr>';
+  }
+}
+
+function renderCurrent() {
+  const s = dState;
+  if (!s) return;
+  const head = $('dHead');
+  const body = $('dRows');
+  const check = $('dCheck');
+  body.innerHTML = '';
+  check.style.display = 'none';
+  $('dNote').textContent = s.note || '';
+  $('dBack').style.display = s.mode === 'rows' && (s.group !== null || s.parent) ? '' : 'none';
+
+  if (s.mode === 'groups') {
+    $('dTitle').textContent = s.label + ' — by category';
+    head.innerHTML = '<tr><th>Category</th><th class="num">Transactions</th><th class="num">Amount</th></tr>';
+    for (const g of s.groups) {
+      const tr = document.createElement('tr');
+      tr.className = 'exp-click';
+      tr.innerHTML =
+        '<td>' + escapeHtml(g.group) + '</td>' +
+        '<td class="num">' + (g.count === null ? '—' : g.count) + '</td>' +
+        '<td class="num' + (g.amount < 0 ? ' neg' : '') + '">' + usd2.format(g.amount) + '</td>';
+      tr.addEventListener('click', () => {
+        if (s.kind === 'expenseCats') {
+          if (g.id) openExpenseDetail(g.id, g.group, g.amount);
+          return;
+        }
+        s.mode = 'rows';
+        s.group = g.group;
+        renderCurrent();
+      });
+      body.appendChild(tr);
+    }
+    const total = Math.round(s.groups.reduce((t, g) => t + g.amount, 0) * 100) / 100;
+    if (s.expected !== null && s.expected !== undefined) {
+      const ok = Math.abs(total - s.expected) <= 0.01;
+      check.style.display = '';
+      check.className = 'dcheck ' + (ok ? 'ok' : 'bad');
+      check.textContent = ok
+        ? '✓ These ' + s.groups.length + ' categories sum to ' + usd2.format(total) + ' — matches the statement.'
+        : '✗ Categories sum to ' + usd2.format(total) + ' but the statement shows ' + usd2.format(s.expected) +
+          ' (difference ' + usd2.format(total - s.expected) + '). The statement may be stale — press Refresh.';
+    }
+    return;
+  }
+
+  // rows mode
+  const rows = s.group === null ? s.rows : s.rows.filter((r) => (r.group || r.name || '—') === s.group);
+  $('dTitle').textContent = s.group === null ? s.label : s.label + ' — ' + s.group;
+  head.innerHTML = '<tr><th>Date</th><th>Who / what</th><th>Type</th><th class="num">Amount</th></tr>';
+  for (const r of rows) {
+    const link = qboLink(r.txnType, r.txnId);
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td>' + escapeHtml(r.date || '') + '</td>' +
+      '<td>' + escapeHtml(r.name) + (r.detail ? '<span class="detail">' + escapeHtml(r.detail) + '</span>' : '') + '</td>' +
+      '<td>' + (link ? '<a class="qlink" href="' + link + '" target="_blank" rel="noopener">' + escapeHtml(r.txnType) + ' ↗</a>' : escapeHtml(r.txnType || '')) + '</td>' +
+      '<td class="num' + (r.amount < 0 ? ' neg' : '') + '">' + usd2.format(r.amount) + '</td>';
+    body.appendChild(tr);
+  }
+  if (!rows.length) body.innerHTML = '<tr><td colspan="4" class="empty">No transactions in this range.</td></tr>';
+  const sum = Math.round(rows.reduce((t, r) => t + r.amount, 0) * 100) / 100;
+  const expected = s.group === null
+    ? s.expected
+    : (s.groups.find((g) => g.group === s.group) || {}).amount;
+  if (expected !== null && expected !== undefined && s.kind !== 'counts') {
+    const ok = Math.abs(sum - expected) <= 0.01;
+    check.style.display = '';
+    check.className = 'dcheck ' + (ok ? 'ok' : 'bad');
+    check.textContent = ok
+      ? '✓ These ' + rows.length + ' rows sum to ' + usd2.format(sum) + ' — matches ' + (s.group === null ? 'the statement.' : 'the category total.')
+      : '✗ These rows sum to ' + usd2.format(sum) + ' but expected ' + usd2.format(expected) +
+        ' (difference ' + usd2.format(sum - expected) + '). The statement may be stale — press Refresh — or something changed in QuickBooks.';
+  }
+}
+
+function goBack() {
+  const s = dState;
+  if (!s) return;
+  if (s.parent) { dState = s.parent; dState.mode = 'groups'; renderCurrent(); return; }
+  s.mode = 'groups';
+  s.group = null;
+  renderCurrent();
+}
+
+function downloadCsv() {
+  const s = dState;
+  if (!s) return;
+  const esc = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+  let lines;
+  if (s.mode === 'groups') {
+    lines = ['Category,Transactions,Amount'];
+    for (const g of s.groups) lines.push([g.group, g.count == null ? '' : g.count, g.amount].map(esc).join(','));
+  } else {
+    const rows = s.group === null ? s.rows : s.rows.filter((r) => (r.group || r.name || '—') === s.group);
+    lines = ['Date,Name,Type,Amount,Detail'];
+    for (const r of rows) lines.push([r.date, r.name, r.txnType, r.amount, r.detail || ''].map(esc).join(','));
+  }
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = ($('dTitle').textContent || 'detail').replace(/[^\w]+/g, '-').toLowerCase() + '-' + Range.get().start + '-' + Range.get().end + '.csv';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+async function load(force) {
+  const fresh = staleGuard();
+  setLoading(true);
+  try {
+    const d = await jfetch('/api/pnl-statement?' + Range.qs() + (force ? '&refresh=1' : ''));
+    if (!fresh()) return;
+    stmtData = d;
+    let h = '';
+    h += '<div class="section">Income</div>';
+    h += row('Money in — bank-verified customer cash', d.income.moneyIn);
+    h += row('POS &amp; online deposits', d.income.deposits, 'sub', 'deposits');
+    if (d.income.invoicePayments) h += row('Invoice payments (bank-landed)', d.income.invoicePayments, 'sub', 'invoicePayments');
+    if (d.income.salesReceipts) h += row('Sales receipts (bank-landed)', d.income.salesReceipts, 'sub', 'salesReceipts');
+    if (d.income.refunds) h += row('Customer refunds', -d.income.refunds, 'sub', 'refunds');
+    h += row('Less: sales tax remitted', -d.income.salesTaxRemitted, null, 'salesTax');
+    h += row('Total income (net revenue)', d.income.netRevenue, 'total');
+    h += '<div class="section">Cost of goods sold</div>';
+    h += row('Inventory purchases (cash, both locations)', d.cogs.inventoryCash, null, 'inventory');
+    if (d.adjusted) {
+      h += row('Less: inventory ' + (d.adjusted.inventoryChange >= 0 ? 'increase' : 'decrease') +
+        ' (counts ' + d.adjusted.beginAsOf + ' → ' + d.adjusted.endAsOf + ')', -d.adjusted.inventoryChange, 'sub', 'inventoryChange');
+    }
+    h += row('Freight, repairs &amp; materials', d.cogs.directCosts, null, 'directCosts');
+    h += row('Less: vendor rebates received', -d.cogs.rebateOffsets, null, 'rebates');
+    if (d.adjusted) {
+      h += row('Total COGS (accounting basis)', d.adjusted.cogsTotal, 'total');
+      h += row('Gross profit' + (d.adjusted.grossMarginPct !== null ? ' — ' + d.adjusted.grossMarginPct.toFixed(1) + '%' : ''), d.adjusted.grossProfit, 'grand');
+    } else {
+      h += row('Total COGS (cash basis — no inventory counts for this range)', d.cogs.total, 'total');
+      h += row('Gross profit' + (d.grossMarginPct !== null ? ' — ' + d.grossMarginPct.toFixed(1) + '%' : ''), d.grossProfit, 'grand');
+    }
+    h += '<div class="section">Expenses</div>';
+    h += row('Operating expenses (books, accrual)', d.expenses.totalFromBooks, null, 'expensesBooks');
+    if (d.expenses.reimbursements) h += row('Less: reimbursements received', -d.expenses.reimbursements, null, 'reimbursements');
+    h += row('Total expenses', d.expenses.net, 'total');
+    h += row('Net operating income', d.adjusted ? d.adjusted.noi : d.noi, 'grand');
+    $('stmt').innerHTML = h;
+    const w = $('warnings');
+    w.innerHTML = '';
+    for (const warn of d.warnings || []) {
+      const div = document.createElement('div');
+      div.textContent = '⚠ ' + warn;
+      w.appendChild(div);
+    }
+    const rows = $('expRows');
+    rows.innerHTML = '';
+    for (const e of d.expenses.rows || []) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = '<td>' + escapeHtml(e.name) + (e.id ? '' : '<span class="detail">summary row</span>') + '</td><td class="num">' + usd2.format(e.amount) + '</td>';
+      if (e.id) {
+        tr.className = 'exp-click';
+        tr.addEventListener('click', () => openExpenseDetail(e.id, e.name, e.amount));
+      }
+      rows.appendChild(tr);
+    }
+    if (!(d.expenses.rows || []).length) rows.innerHTML = '<tr><td colspan="2" class="empty">Expense detail unavailable from the books report.</td></tr>';
+  } catch (err) {
+    if (err.message !== 'signed out') showBanner('<strong>Error.</strong> ' + escapeHtml(err.message));
+  } finally {
+    setLoading(false);
+  }
+  $('backLink').href = linkWithRange('/');
+}
+
+async function loadCounts() {
+  try {
+    const d = await jfetch('/api/inventory-counts');
+    const rows = $('icRows');
+    rows.innerHTML = '';
+    for (const c of d.counts) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = '<td>' + c.asOf + '</td><td class="num">' + usd2.format(c.value) + '</td>' +
+        '<td style="text-align:right"><button class="btn" data-del="' + c.asOf + '">Remove</button></td>';
+      rows.appendChild(tr);
+    }
+    if (!d.counts.length) rows.innerHTML = '<tr><td colspan="3" class="empty">No counts yet — add month-end values above.</td></tr>';
+    rows.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', async () => {
+      if (!confirm('Remove the ' + b.dataset.del + ' count?')) return;
+      await fetch('/api/inventory-counts?asOf=' + b.dataset.del, { method: 'DELETE' });
+      loadCounts(); load(false);
+    }));
+  } catch (e) { /* non-fatal */ }
+}
+
+async function saveCount() {
+  const asOf = $('icDate').value;
+  const value = parseFloat($('icValue').value.replace(/[$,]/g, ''));
+  if (!asOf || !Number.isFinite(value)) { alert('Enter a date and a value.'); return; }
+  const res = await fetch('/api/inventory-counts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ asOf, value }),
+  });
+  if (!res.ok) { alert('Save failed'); return; }
+  $('icValue').value = '';
+  loadCounts();
+  load(false);
+}
+
+async function init() {
+  mountRange((force) => { $('detailCard').style.display = 'none'; dState = null; detailSeq++; load(force); });
+  $('icSave').addEventListener('click', saveCount);
+  $('dClose').addEventListener('click', () => { $('detailCard').style.display = 'none'; dState = null; detailSeq++; });
+  $('dCsv').addEventListener('click', downloadCsv);
+  $('dBack').addEventListener('click', goBack);
+  $('stmt').addEventListener('click', (e) => {
+    const el = e.target.closest('.srow.click');
+    if (!el) return;
+    if (el.dataset.key === 'expensesBooks') openExpenseBreakdown();
+    else openDetail(el.dataset.key, el.dataset.label.replace(/&amp;/g, '&'));
+  });
+  if (await checkStatus()) { load(false); loadCounts(); }
+}
+init();
+</script>
+</body>
+</html>

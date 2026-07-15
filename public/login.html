@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · Pictureline</title>
+<link rel="stylesheet" href="/theme.css">
+<style>
+  .auth-wrap { max-width: 380px; margin: 12vh auto 0; padding: 0 20px; }
+  .auth-card { background: var(--surface); border: 1px solid var(--hairline); border-radius: 18px; padding: 28px; box-shadow: 0 8px 30px rgba(0,0,0,.06); }
+  .auth-card h1 { font-size: 21px; margin: 0 0 4px; }
+  .auth-card p { color: var(--ink-2); font-size: 13px; margin: 0 0 18px; }
+  .auth-card label { display:block; font-size: 12px; color: var(--ink-2); margin: 12px 0 5px; }
+  .auth-card input { width: 100%; box-sizing: border-box; font: inherit; font-size: 14px; color: var(--ink); background: var(--page); border: 1px solid var(--hairline); border-radius: 10px; padding: 10px 12px; }
+  .auth-card button { width: 100%; margin-top: 18px; font: inherit; font-size: 14px; font-weight: 600; color: #fff; background: var(--accent); border: 0; border-radius: 10px; padding: 11px; cursor: pointer; }
+  .auth-card button:disabled { opacity: .6; cursor: default; }
+  .auth-err { color: var(--bad); font-size: 13px; margin-top: 12px; min-height: 18px; }
+</style>
+</head>
+<body>
+<div class="auth-wrap">
+  <div class="auth-card">
+    <h1>Pictureline <span style="color:var(--ink-3);font-weight:400">Cash Reports</span></h1>
+    <p>Sign in to see the reports.</p>
+    <form id="f">
+      <label for="email">Email</label>
+      <input id="email" type="email" autocomplete="username" required>
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password" required>
+      <button id="btn" type="submit">Sign in</button>
+      <div class="auth-err" id="err"></div>
+    </form>
+  </div>
+</div>
+<script>
+document.getElementById('f').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const btn = document.getElementById('btn');
+  const err = document.getElementById('err');
+  btn.disabled = true; err.textContent = '';
+  try {
+    const res = await fetch('/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: document.getElementById('email').value,
+        password: document.getElementById('password').value,
+      }),
+    });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) { err.textContent = d.error || 'Sign-in failed. Try again.'; btn.disabled = false; return; }
+    location.href = d.mustChange ? '/password' : '/';
+  } catch {
+    err.textContent = 'Couldn’t reach the server. Try again.';
+    btn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>

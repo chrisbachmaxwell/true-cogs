@@ -1,0 +1,354 @@
+import crypto from 'crypto';
+import OAuthClient from 'intuit-oauth';
+import QuickBooks from 'node-quickbooks';
+import { config } from './config';
+import { loadTokens, saveTokens, TokenSet } from './tokenStore';
+
+const REFRESH_MARGIN_MS = 5 * 60 * 1000; // refresh access token when <5 min remain
+const QBO_MINOR_VERSION = 75;
+
+/** Narrow surface consumed by the business logic, so it can be unit-tested with a mock. */
+export interface QboApi {
+  /** Runs `SELECT * FROM <entity> WHERE TxnDate >= start AND TxnDate <= end`, fully paginated. */
+  queryByDateRange(entity: EntityName, start: string, end: string): Promise<any[]>;
+  /** Entities modified after the given ISO timestamp (for incremental sync). */
+  queryChangedSince?(entity: EntityName, sinceIso: string): Promise<any[]>;
+  getBill(id: string): Promise<any>;
+  getInvoice(id: string): Promise<any>;
+  /** Full chart of accounts (paginated). */
+  listAccounts(): Promise<any[]>;
+  /** Full item list (paginated) — for mapping sale lines to income accounts. */
+  listItems(): Promise<any[]>;
+  /** Balance sheet report as of a date (raw QBO report payload). */
+  balanceSheet(asOfDate: string): Promise<any>;
+  /** Accrual P&L report for a date range (raw QBO report payload). */
+  profitAndLoss(startDate: string, endDate: string): Promise<any>;
+}
+
+export type EntityName =
+  | 'BillPayment'
+  | 'Purchase'
+  | 'Bill'
+  | 'VendorCredit'
+  | 'JournalEntry'
+  | 'Deposit'
+  | 'SalesReceipt'
+  | 'Payment'
+  | 'RefundReceipt'
+  | 'Transfer';
+
+const FINDER_BY_ENTITY: Record<EntityName, string> = {
+  BillPayment: 'findBillPayments',
+  Purchase: 'findPurchases',
+  Bill: 'findBills',
+  VendorCredit: 'findVendorCredits',
+  JournalEntry: 'findJournalEntries',
+  Deposit: 'findDeposits',
+  SalesReceipt: 'findSalesReceipts',
+  Payment: 'findPayments',
+  RefundReceipt: 'findRefundReceipts',
+  Transfer: 'findTransfers',
+};
+
+function oauthClient(): any {
+  return new OAuthClient({
+    clientId: config.qboClientId,
+    clientSecret: config.qboClientSecret,
+    environment: config.qboEnvironment,
+    redirectUri: config.qboRedirectUri,
+  });
+}
+
+// Single-user internal tool: pending OAuth states kept in memory with a short TTL.
+const pendingStates = new Map<string, number>();
+
+export function buildAuthUri(): string {
+  const state = crypto.randomBytes(16).toString('hex');
+  pendingStates.set(state, Date.now() + 10 * 60 * 1000);
+  for (const [s, exp] of pendingStates) if (exp < Date.now()) pendingStates.delete(s);
+  return oauthClient().authorizeUri({
+    scope: [OAuthClient.scopes.Accounting],
+    state,
+  });
+}
+
+function tokenSetFromAuthResponse(authResponse: any, realmId: string, connectedAt: number): TokenSet {
+  const j = typeof authResponse.getJson === 'function' ? authResponse.getJson() : authResponse.json;
+  const now = Date.now();
+  return {
+    accessToken: j.access_token,
+    refreshToken: j.refresh_token,
+    realmId,
+    accessTokenExpiresAt: now + j.expires_in * 1000,
+    refreshTokenExpiresAt: now + j.x_refresh_token_expires_in * 1000,
+    lastRefreshedAt: now,
+    connectedAt,
+  };
+}
+
+/** Exchanges the OAuth callback for tokens and persists them. */
+export async function handleCallback(callbackUrl: string): Promise<TokenSet> {
+  const url = new URL(callbackUrl, 'http://localhost');
+  const state = url.searchParams.get('state') || '';
+  if (!pendingStates.has(state)) {
+    throw new Error('OAuth state mismatch — start again from /connect');
+  }
+  pendingStates.delete(state);
+  const realmId = url.searchParams.get('realmId');
+  if (!realmId) throw new Error('Callback is missing realmId');
+
+  const client = oauthClient();
+  const authResponse = await client.createToken(callbackUrl);
+  const existing = await loadTokens().catch(() => null);
+  const tokens = tokenSetFromAuthResponse(authResponse, realmId, existing?.connectedAt ?? Date.now());
+  await saveTokens(tokens);
+  return tokens;
+}
+
+/** Returns stored tokens, refreshing first if the access token is close to expiry.
+ * Refresh tokens rotate on every use, so the rotated pair is persisted immediately. */
+export async function getFreshTokens(): Promise<TokenSet> {
+  const tokens = await loadTokens();
+  if (!tokens) throw new Error('Not connected to QuickBooks — visit /connect first');
+
+  if (tokens.accessTokenExpiresAt - Date.now() > REFRESH_MARGIN_MS) {
+    return tokens;
+  }
+  const client = oauthClient();
+  const authResponse = await client.refreshUsingToken(tokens.refreshToken);
+  const refreshed = tokenSetFromAuthResponse(authResponse, tokens.realmId, tokens.connectedAt);
+  await saveTokens(refreshed);
+  console.log('[qbo] access token refreshed; refresh token rotated');
+  return refreshed;
+}
+
+function qboClient(tokens: TokenSet): any {
+  return new QuickBooks(
+    config.qboClientId,
+    config.qboClientSecret,
+    tokens.accessToken,
+    false, // no token secret in OAuth2
+    tokens.realmId,
+    config.qboEnvironment === 'sandbox',
+    false, // debug
+    QBO_MINOR_VERSION,
+    '2.0',
+    tokens.refreshToken
+  );
+}
+
+/** Builds a safe error: only the HTTP status and QBO Fault details — never the
+ * raw axios error, whose config would leak the Authorization header. */
+function qboError(label: string, err: any): Error {
+  const status = err?.status ?? err?.response?.status;
+  const fault = err?.Fault ?? err?.response?.data?.Fault;
+  let detail: string;
+  if (fault?.Error?.length) {
+    detail = fault.Error.map((e: any) => `${e.Message}${e.Detail ? ` — ${e.Detail}` : ''}`).join('; ');
+  } else if (status === 429) {
+    detail = 'QuickBooks rate limit exceeded';
+  } else {
+    detail = typeof err?.message === 'string' ? err.message : 'Unknown error';
+  }
+  return new Error(`QBO ${label} failed${status ? ` (HTTP ${status})` : ''}: ${detail}`);
+}
+
+function isRateLimit(err: any): boolean {
+  const status = err?.status ?? err?.response?.status;
+  return status === 429 || /status code 429/.test(String(err?.message || ''));
+}
+
+// Production QBO allows ~500 requests/minute per realm. Pace all API calls
+// through one queue with a minimum gap, and back off on 429s.
+const MIN_REQUEST_GAP_MS = 150;
+const MAX_RETRIES = 5;
+let requestChain: Promise<void> = Promise.resolve();
+let lastRequestAt = 0;
+
+function throttleSlot(): Promise<void> {
+  const slot = requestChain.then(async () => {
+    const wait = lastRequestAt + MIN_REQUEST_GAP_MS - Date.now();
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    lastRequestAt = Date.now();
+  });
+  requestChain = slot.catch(() => undefined);
+  return slot;
+}
+
+async function withThrottleAndRetry<T>(label: string, fn: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    await throttleSlot();
+    try {
+      return await fn();
+    } catch (err: any) {
+      if (isRateLimit(err) && attempt < MAX_RETRIES) {
+        const delay = Math.min(2 ** attempt * 1000, 30_000) + Math.floor(Math.random() * 500);
+        console.warn(`[qbo] 429 on ${label} — retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES})`);
+        await new Promise((r) => setTimeout(r, delay));
+        continue;
+      }
+      throw qboError(label, err);
+    }
+  }
+}
+
+function callFinder(qbo: any, method: string, criteria: any[]): Promise<any> {
+  return withThrottleAndRetry(
+    method,
+    () =>
+      new Promise((resolve, reject) => {
+        qbo[method](criteria, (err: any, data: any) => (err ? reject(err) : resolve(data)));
+      })
+  );
+}
+
+const PAGE_SIZE = 1000; // QBO's max page size
+
+export async function createQboApi(): Promise<QboApi> {
+  const tokens = await getFreshTokens();
+  const qbo = qboClient(tokens);
+
+  async function listAll(method: string, entityKey: string): Promise<any[]> {
+    const results: any[] = [];
+    let offset = 1;
+    for (;;) {
+      const data = await callFinder(qbo, method, [
+        { field: 'offset', value: offset },
+        { field: 'limit', value: PAGE_SIZE },
+      ]);
+      const page: any[] = data?.QueryResponse?.[entityKey] || [];
+      results.push(...page);
+      if (page.length < PAGE_SIZE) break;
+      offset += PAGE_SIZE;
+    }
+    return results;
+  }
+
+  async function queryAll(entity: EntityName, baseCriteria: any[]): Promise<any[]> {
+    const method = FINDER_BY_ENTITY[entity];
+    const results: any[] = [];
+    let offset = 1; // STARTPOSITION is 1-based
+    for (;;) {
+      const criteria = [
+        ...baseCriteria,
+        { field: 'offset', value: offset },
+        { field: 'limit', value: PAGE_SIZE },
+      ];
+      const data = await callFinder(qbo, method, criteria);
+      const page: any[] = data?.QueryResponse?.[entity] || [];
+      results.push(...page);
+      if (page.length < PAGE_SIZE) break;
+      offset += PAGE_SIZE;
+    }
+    return results;
+  }
+
+  return {
+    queryByDateRange(entity, start, end) {
+      return queryAll(entity, [
+        { field: 'TxnDate', value: start, operator: '>=' },
+        { field: 'TxnDate', value: end, operator: '<=' },
+      ]);
+    },
+    queryChangedSince(entity, sinceIso) {
+      return queryAll(entity, [
+        { field: 'MetaData.LastUpdatedTime', value: sinceIso, operator: '>' },
+      ]);
+    },
+    getBill(id: string) {
+      return withThrottleAndRetry(
+        `getBill(${id})`,
+        () =>
+          new Promise((resolve, reject) => {
+            qbo.getBill(id, (err: any, bill: any) => (err ? reject(err) : resolve(bill)));
+          })
+      );
+    },
+    getInvoice(id: string) {
+      return withThrottleAndRetry(
+        `getInvoice(${id})`,
+        () =>
+          new Promise((resolve, reject) => {
+            qbo.getInvoice(id, (err: any, inv: any) => (err ? reject(err) : resolve(inv)));
+          })
+      );
+    },
+    async listAccounts() {
+      return listAll('findAccounts', 'Account');
+    },
+    async listItems() {
+      return listAll('findItems', 'Item');
+    },
+    balanceSheet(asOfDate: string) {
+      return withThrottleAndRetry(
+        `balanceSheet(${asOfDate})`,
+        () =>
+          new Promise((resolve, reject) => {
+            qbo.reportBalanceSheet(
+              { start_date: asOfDate, end_date: asOfDate, accounting_method: 'Accrual' },
+              (err: any, report: any) => (err ? reject(err) : resolve(report))
+            );
+          })
+      );
+    },
+    profitAndLoss(startDate: string, endDate: string) {
+      return withThrottleAndRetry(
+        `profitAndLoss(${startDate}..${endDate})`,
+        () =>
+          new Promise((resolve, reject) => {
+            qbo.reportProfitAndLoss(
+              { start_date: startDate, end_date: endDate, accounting_method: 'Accrual' },
+              (err: any, report: any) => (err ? reject(err) : resolve(report))
+            );
+          })
+      );
+    },
+  };
+}
+
+export interface ConnectionStatus {
+  connected: boolean;
+  realmId?: string;
+  environment: string;
+  accessTokenExpiresAt?: string;
+  refreshTokenExpiresAt?: string;
+  lastRefreshedAt?: string;
+  connectedAt?: string;
+  daysSinceLastRefresh?: number;
+  daysUntilReauthRequired?: number;
+  staleWarning?: string;
+}
+
+/** Intuit policy: refresh at least every ~100 days, full reauth after 5 years. */
+export async function connectionStatus(): Promise<ConnectionStatus> {
+  const tokens = await loadTokens().catch(() => null);
+  if (!tokens) return { connected: false, environment: config.qboEnvironment };
+
+  const now = Date.now();
+  const daysSinceRefresh = (now - tokens.lastRefreshedAt) / 86_400_000;
+  const fiveYearsMs = 5 * 365 * 86_400_000;
+  const daysUntilReauth = (tokens.connectedAt + fiveYearsMs - now) / 86_400_000;
+
+  let staleWarning: string | undefined;
+  if (now > tokens.refreshTokenExpiresAt) {
+    staleWarning = 'The refresh token has expired. Reconnect via /connect.';
+  } else if (daysSinceRefresh > 80) {
+    staleWarning = `No token refresh in ${Math.floor(daysSinceRefresh)} days — Intuit disconnects after ~100 days idle. Load any report to refresh, or reconnect via /connect.`;
+  } else if (daysUntilReauth < 30) {
+    staleWarning = `Connection is ${Math.max(0, Math.floor(daysUntilReauth))} days from Intuit's 5-year reauthorization limit. Reconnect via /connect soon.`;
+  }
+  if (staleWarning) console.warn(`[qbo] ${staleWarning}`);
+
+  return {
+    connected: true,
+    realmId: tokens.realmId,
+    environment: config.qboEnvironment,
+    accessTokenExpiresAt: new Date(tokens.accessTokenExpiresAt).toISOString(),
+    refreshTokenExpiresAt: new Date(tokens.refreshTokenExpiresAt).toISOString(),
+    lastRefreshedAt: new Date(tokens.lastRefreshedAt).toISOString(),
+    connectedAt: new Date(tokens.connectedAt).toISOString(),
+    daysSinceLastRefresh: Math.floor(daysSinceRefresh),
+    daysUntilReauthRequired: Math.floor(daysUntilReauth),
+    staleWarning,
+  };
+}
