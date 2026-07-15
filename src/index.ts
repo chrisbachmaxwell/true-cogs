@@ -976,10 +976,27 @@ async function getStatement(range: { start: string; end: string }, force: boolea
       const r2 = (n: number) => Math.round(n * 100) / 100;
       const expensesNet = r2(expenses.total - pnl.expenseOffsets);
       // Accounting-basis COGS from physical counts: begin + purchases − end.
-      const beginCount = await countAsOf(dayBefore(range.start));
+      // A count dated exactly on the range start serves as the beginning value
+      // (mid-year ranges like "Jun 30 → Jun 30" use the Jun 30 count, not one
+      // from months earlier); for typical Jan-1 starts this still picks Dec 31.
+      const beginCount = await countAsOf(range.start === range.end ? dayBefore(range.start) : range.start);
       const endCount = await countAsOf(range.end);
+      const daysBetween = (a: string, b: string) =>
+        Math.abs(new Date(`${a}T00:00:00Z`).getTime() - new Date(`${b}T00:00:00Z`).getTime()) / 86_400_000;
       let adjusted: any = null;
       if (beginCount && endCount && endCount.asOf >= range.start) {
+        const beginGap = daysBetween(beginCount.asOf, range.start);
+        const endGap = daysBetween(endCount.asOf, range.end);
+        if (beginGap > 20) {
+          pnl.warnings.push(
+            `The beginning inventory count (${beginCount.asOf}) is ${Math.round(beginGap)} days before this range starts — the accounting-basis COGS is only as accurate as that gap allows. Enter a count near ${range.start} for a tighter statement.`
+          );
+        }
+        if (endGap > 20) {
+          pnl.warnings.push(
+            `The ending inventory count (${endCount.asOf}) is ${Math.round(endGap)} days from the range end — enter a count near ${range.end} for a tighter statement.`
+          );
+        }
         const inventoryChange = r2(endCount.value - beginCount.value);
         const adjustedCogsTotal = r2(pnl.cogs - inventoryChange + pnl.directCosts - pnl.cogsOffsets);
         const adjustedGp = r2(pnl.revenueNet - adjustedCogsTotal);
