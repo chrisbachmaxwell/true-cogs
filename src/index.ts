@@ -183,7 +183,26 @@ app.get(
     if (missing.length) {
       return res.json({ connected: false, environment: config.qboEnvironment, missingConfig: missing });
     }
-    res.json(await connectionStatus());
+    const status: any = await connectionStatus();
+    if (status.connected) {
+      // Surface which chart-of-accounts entry the spend math is keyed to, so the
+      // account number can be verified against the books.
+      try {
+        const api = await createQboApi();
+        const account = await api.getAccount(await getInventoryAccountId(api));
+        status.inventoryAccount = {
+          id: account.Id,
+          name: account.Name,
+          acctNum: account.AcctNum ?? null,
+          fullyQualifiedName: account.FullyQualifiedName,
+          type: account.AccountType,
+          active: account.Active,
+        };
+      } catch (err: any) {
+        status.inventoryAccountError = err.message;
+      }
+    }
+    res.json(status);
   })
 );
 

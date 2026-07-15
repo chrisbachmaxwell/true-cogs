@@ -191,7 +191,9 @@ async function loadStatus() {
   const res = await fetch('/api/status');
   if (res.status === 401) { location.href = '/login'; return false; }
   const s = await res.json();
-  $('env').textContent = s.environment === 'production' ? 'QuickBooks · production' : 'QuickBooks · sandbox';
+  $('env').textContent =
+    (s.environment === 'production' ? 'QuickBooks · production' : 'QuickBooks · sandbox') +
+    (s.inventoryAccount ? ' · ' + s.inventoryAccount.name + (s.inventoryAccount.acctNum ? ' #' + s.inventoryAccount.acctNum : '') : '');
   if (s.missingConfig) {
     showBanner('<strong>Not configured.</strong> Missing env vars: ' + s.missingConfig.join(', '));
     return false;

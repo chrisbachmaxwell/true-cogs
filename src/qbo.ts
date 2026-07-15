@@ -13,6 +13,7 @@ export interface QboApi {
   queryByDateRange(entity: EntityName, start: string, end: string): Promise<any[]>;
   getBill(id: string): Promise<any>;
   findAccountsByName(name: string): Promise<any[]>;
+  getAccount(id: string): Promise<any>;
 }
 
 export type EntityName = 'BillPayment' | 'Purchase' | 'Bill' | 'VendorCredit' | 'JournalEntry' | 'Deposit';
@@ -222,6 +223,15 @@ export async function createQboApi(): Promise<QboApi> {
     findAccountsByName(name: string) {
       return callFinder(qbo, 'findAccounts', [{ field: 'Name', value: name }]).then(
         (data) => data?.QueryResponse?.Account || []
+      );
+    },
+    getAccount(id: string) {
+      return withThrottleAndRetry(
+        `getAccount(${id})`,
+        () =>
+          new Promise((resolve, reject) => {
+            qbo.getAccount(id, (err: any, account: any) => (err ? reject(err) : resolve(account)));
+          })
       );
     },
   };
