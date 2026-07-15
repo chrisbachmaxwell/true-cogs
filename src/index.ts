@@ -715,7 +715,31 @@ app.get(
       return [...by.values()].map((v) => ({ ...v, amount: Math.round(v.amount * 100) / 100 }))
         .sort((a, b) => b.amount - a.amount);
     };
-    res.json({ start: startDate, end: endDate, payments: summarize(payments), salesReceipts: summarize(receipts) });
+    const byCustomer = (txns: any[], bankOnly: boolean | null) => {
+      const banks = new Set((accounts as any[]).filter((a) => a.AccountType === 'Bank').map((a) => String(a.Id)));
+      const by = new Map<string, { amount: number; count: number }>();
+      for (const t of txns) {
+        const isBank = banks.has(String(t.DepositToAccountRef?.value || ''));
+        if (bankOnly !== null && isBank !== bankOnly) continue;
+        const name = t.CustomerRef?.name || 'Unknown customer';
+        const cur = by.get(name) || { amount: 0, count: 0 };
+        cur.amount += Number(t.TotalAmt) || 0;
+        cur.count++;
+        by.set(name, cur);
+      }
+      return [...by.entries()]
+        .map(([customer, v]) => ({ customer, amount: Math.round(v.amount * 100) / 100, count: v.count }))
+        .sort((a, b) => b.amount - a.amount)
+        .slice(0, 20);
+    };
+    res.json({
+      start: startDate,
+      end: endDate,
+      payments: summarize(payments),
+      salesReceipts: summarize(receipts),
+      bankPaymentsByCustomer: byCustomer(payments, true),
+      nonBankPaymentsByCustomer: byCustomer(payments, false),
+    });
   })
 );
 
