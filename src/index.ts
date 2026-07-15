@@ -374,6 +374,27 @@ function flattenReportRows(rows: any, out: { name: string; id: string | null; va
 }
 
 app.get(
+  '/api/accounts',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const api = await createQboApi();
+    const type = String(req.query.type || '').toLowerCase();
+    const accounts = (await api.listAccounts())
+      .filter((a) => !type || (a.AccountType || '').toLowerCase().includes(type))
+      .map((a) => ({
+        id: a.Id,
+        acctNum: a.AcctNum ?? null,
+        name: a.Name,
+        type: a.AccountType,
+        subType: a.AccountSubType,
+        active: a.Active,
+        currentBalance: a.CurrentBalance,
+      }));
+    res.json({ count: accounts.length, accounts });
+  })
+);
+
+app.get(
   '/api/balance-sheet',
   requireAuth,
   asyncRoute(async (req, res) => {
