@@ -11,6 +11,8 @@ const QBO_MINOR_VERSION = 75;
 export interface QboApi {
   /** Runs `SELECT * FROM <entity> WHERE TxnDate >= start AND TxnDate <= end`, fully paginated. */
   queryByDateRange(entity: EntityName, start: string, end: string): Promise<any[]>;
+  /** Entities modified after the given ISO timestamp (for incremental sync). */
+  queryChangedSince?(entity: EntityName, sinceIso: string): Promise<any[]>;
   getBill(id: string): Promise<any>;
   getInvoice(id: string): Promise<any>;
   /** Full chart of accounts (paginated). */
@@ -244,6 +246,11 @@ export async function createQboApi(): Promise<QboApi> {
       return queryAll(entity, [
         { field: 'TxnDate', value: start, operator: '>=' },
         { field: 'TxnDate', value: end, operator: '<=' },
+      ]);
+    },
+    queryChangedSince(entity, sinceIso) {
+      return queryAll(entity, [
+        { field: 'MetaData.LastUpdatedTime', value: sinceIso, operator: '>' },
       ]);
     },
     getBill(id: string) {

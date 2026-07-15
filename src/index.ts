@@ -6,6 +6,7 @@ import { buildAuthUri, handleCallback, createQboApi, connectionStatus, QboApi } 
 import { computeMonthlySpend, MonthlySpendResult } from './inventorySpend';
 import { computeMonthlyPnl, MonthlyPnl } from './pnl';
 import { computeCashFlow, reportBalances } from './cashflow';
+import { runSync, syncIfStale, syncStatus, isStoreFresh, makeLocalApi } from './sync';
 import { computeBankFlow } from './bankflow';
 import { monthDateRange } from './inventorySpend';
 import {
@@ -99,6 +100,14 @@ app.get('/auth/logout', (_req, res) => {
 
 app.use(['/api/inventory-spend', '/api/inventory-spend/trend', '/api/pnl', '/api/status'], requireAuth);
 
+/** Data source for computations: the local mirror when it's fresh, otherwise
+ * the live API. The remote client is always created (token upkeep + report
+ * and fallback delegation). */
+async function getComputeApi(): Promise<QboApi> {
+  const remote = await createQboApi();
+  return (await isStoreFresh()) ? makeLocalApi(remote) : remote;
+}
+
 const ACCOUNTS_KEY = 'inventory_accounts_json';
 
 interface TrackedAccount {
@@ -156,7 +165,7 @@ async function getTrackedAccounts(api?: QboApi): Promise<TrackedAccount[]> {
   const cached = readAccountCache(await getConfigValue(ACCOUNTS_KEY), config.inventoryAccounts);
   if (cached) return cached;
   const resolved = await resolveAccounts(
-    api ?? (await createQboApi()),
+    api ?? (await getComputeApi()),
     config.inventoryAccounts,
     /inventory/i
   );
@@ -232,7 +241,7 @@ async function getMonthlySpend(
     if (inFlight) return inFlight;
   }
   const promise = (async () => {
-    const api = await createQboApi();
+    const api = await getComputeApi();
     const result = await computeMonthlySpend(api, ids, month);
     await setCachedMonth(cacheKey, result);
     return result;
@@ -282,7 +291,7 @@ const BANK_ACCOUNTS_KEY = 'bank_accounts_json';
 async function getBankAccounts(api?: QboApi): Promise<TrackedAccount[]> {
   const cached = await getConfigValue(BANK_ACCOUNTS_KEY);
   if (cached) return JSON.parse(cached) as TrackedAccount[];
-  const all = await (api ?? (await createQboApi())).listAccounts();
+  const all = await (api ?? (await getComputeApi())).listAccounts();
   const banks: TrackedAccount[] = all
     .filter((a) => a.AccountType === 'Bank')
     .map((a) => ({ id: String(a.Id), acctNum: a.AcctNum ?? null, name: a.Name }));
@@ -396,7 +405,7 @@ async function getMonthlyPnl(month: string, forceRefresh: boolean): Promise<Mont
   }
   const promise = (async () => {
     const spend = await getMonthlySpend(month, forceRefresh); // combined accounts, cached
-    const api = await createQboApi();
+    const api = await getComputeApi();
     const tax = await getSalesTaxRemitted(api, month);
     const result = await computeMonthlyPnl(
       api,
@@ -568,7 +577,7 @@ app.get(
       }
     }
     const result = await dedupe(cacheKey, async () => {
-      const api = await createQboApi();
+      const api = await getComputeApi();
       const r = await computeCashFlow(api, asOfStart, asOfEnd);
       await setCachedMonth(cacheKey, r);
       return r;
@@ -596,7 +605,7 @@ app.get(
       }
     }
     const result = await dedupe(cacheKey, async () => {
-      const api = await createQboApi();
+      const api = await getComputeApi();
       const banks = await getBankAccounts(api);
       const inventoryIds = (await getTrackedAccounts(api)).map((t) => t.id);
       // Actual bank change comes from the balance-sheet diff at the range edges.
@@ -627,7 +636,7 @@ app.get(
     if (!range) return;
     const startDate = monthDateRange(range.start).start;
     const endDate = monthDateRange(range.end).end;
-    const api = await createQboApi();
+    const api = await getComputeApi();
     const [deposits, accounts] = [
       await api.queryByDateRange('Deposit', startDate, endDate),
       await api.listAccounts(),
@@ -680,7 +689,7 @@ app.get(
     if (!range) return;
     const startDate = monthDateRange(range.start).start;
     const endDate = monthDateRange(range.end).end;
-    const api = await createQboApi();
+    const api = await getComputeApi();
     const [payments, receipts, accounts] = [
       await api.queryByDateRange('Payment', startDate, endDate),
       await api.queryByDateRange('SalesReceipt', startDate, endDate),
@@ -710,11 +719,23 @@ app.get(
   })
 );
 
+/** Trigger a sync of the raw-transaction mirror. ?full=1 re-pulls the window. */
+app.get(
+  '/api/sync',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const status = await syncStatus();
+    if (status.running) return res.json({ started: false, ...status });
+    runSync(req.query.full === '1').catch(() => undefined);
+    res.json({ started: true, ...status });
+  })
+);
+
 app.get(
   '/api/accounts',
   requireAuth,
   asyncRoute(async (req, res) => {
-    const api = await createQboApi();
+    const api = await getComputeApi();
     const type = String(req.query.type || '').toLowerCase();
     const accounts = (await api.listAccounts())
       .filter((a) => !type || (a.AccountType || '').toLowerCase().includes(type))
@@ -739,7 +760,7 @@ app.get(
     if (!/^\d{4}-\d{2}-\d{2}$/.test(asOf)) {
       return res.status(400).json({ error: 'Provide ?as_of=YYYY-MM-DD' });
     }
-    const api = await createQboApi();
+    const api = await getComputeApi();
     const report = await api.balanceSheet(asOf);
     res.json({ asOf, accounts: flattenReportRows(report?.Rows) });
   })
@@ -753,11 +774,12 @@ app.get(
       return res.json({ connected: false, environment: config.qboEnvironment, missingConfig: missing });
     }
     const status: any = await connectionStatus();
+    status.sync = await syncStatus();
     if (status.connected) {
       // Surface which chart-of-accounts entry the spend math is keyed to, so the
       // account number can be verified against the books.
       try {
-        const api = await createQboApi();
+        const api = await getComputeApi();
         status.inventoryAccounts = await getTrackedAccounts(api);
       } catch (err: any) {
         status.inventoryAccountError = err.message;
@@ -782,6 +804,11 @@ async function main() {
   if (config.databaseUrl) {
     await initDb();
     console.log('[db] schema ready');
+    // Keep the raw-transaction mirror fresh: check at boot and twice daily.
+    if (!missingQboConfig().length) {
+      setTimeout(() => syncIfStale(), 15_000);
+      setInterval(() => syncIfStale(), 12 * 60 * 60 * 1000);
+    }
   } else {
     console.warn('[db] DATABASE_URL not set — token storage and caching disabled');
   }

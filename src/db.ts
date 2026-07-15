@@ -43,6 +43,19 @@ export async function initDb(): Promise<void> {
     );
   `);
   await db.query(`
+    CREATE TABLE IF NOT EXISTS qbo_txns (
+      entity_type TEXT NOT NULL,
+      id TEXT NOT NULL,
+      txn_date DATE,
+      last_updated TIMESTAMPTZ,
+      data JSONB NOT NULL,
+      PRIMARY KEY (entity_type, id)
+    );
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS qbo_txns_date_idx ON qbo_txns (entity_type, txn_date);
+  `);
+  await db.query(`
     CREATE TABLE IF NOT EXISTS monthly_cache (
       month TEXT PRIMARY KEY,
       data JSONB NOT NULL,
