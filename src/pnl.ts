@@ -38,6 +38,12 @@ export interface MonthlyPnl {
     directInvoicePayments: number;
     total: number;
   };
+  /** Deposited money-back from vendors, coded to COGS-type accounts (refunds,
+   * rebates). Reduces COGS in the gross-profit math. */
+  cogsOffsets: number;
+  /** Deposited reimbursements coded to Expense-type accounts (ad co-op etc.).
+   * Reduces operating expenses when computing NOI. */
+  expenseOffsets: number;
   /** Sales tax remitted this month — deducted from revenue because the POS
    * sync books tax-inclusive amounts into the income accounts. */
   salesTaxRemitted: number;
@@ -93,6 +99,8 @@ export interface PnlContext {
   retailIncomeAccountIds: string[];
   /** itemId → income account id (from Item.IncomeAccountRef). */
   itemIncomeAccount: Map<string, string>;
+  /** accountId → AccountType, for classifying non-income deposit lines. */
+  accountTypes?: Map<string, string>;
 }
 
 export async function computeMonthlyPnl(
@@ -117,14 +125,29 @@ export async function computeMonthlyPnl(
 
   // ---- Retail cash in ----
   // Income lines only count when the deposit actually landed in a Bank-type
-  // account — a deposit routed elsewhere never increased the bank.
+  // account — a deposit routed elsewhere never increased the bank. Deposited
+  // money-back coded to COGS/Expense accounts (vendor rebates, ad co-op) is
+  // captured as cost offsets rather than revenue.
   let depositRetail = 0;
   let nonBankIncomeDeposits = 0;
+  let cogsOffsets = 0;
+  let expenseOffsets = 0;
   for (const d of deposits) {
     const portion = depositRetailPortion(d, retailIds);
-    if (portion === 0) continue;
-    if (toBank(d)) depositRetail += portion;
-    else nonBankIncomeDeposits += portion;
+    if (portion !== 0) {
+      if (toBank(d)) depositRetail += portion;
+      else nonBankIncomeDeposits += portion;
+    }
+    if (toBank(d) && ctx.accountTypes) {
+      for (const line of d.Line || []) {
+        const ref = line.DepositLineDetail?.AccountRef?.value;
+        if (!ref || retailIds.has(ref)) continue;
+        const type = ctx.accountTypes.get(String(ref));
+        const amt = Number(line.Amount) || 0;
+        if (type === 'Cost of Goods Sold') cogsOffsets += amt;
+        else if (type === 'Expense' || type === 'Other Expense') expenseOffsets += amt;
+      }
+    }
   }
   if (nonBankIncomeDeposits > 0) {
     warnings.push(
@@ -203,13 +226,15 @@ export async function computeMonthlyPnl(
       directInvoicePayments: round2(directPay),
       total: bankTotal,
     },
+    cogsOffsets: round2(cogsOffsets),
+    expenseOffsets: round2(expenseOffsets),
     salesTaxRemitted: round2(salesTaxRemitted),
     revenueNet: round2(retailTotal - salesTaxRemitted),
     cogs: round2(cogs),
-    grossProfit: round2(retailTotal - salesTaxRemitted - cogs),
+    grossProfit: round2(retailTotal - salesTaxRemitted - cogs + cogsOffsets),
     grossMarginPct:
       retailTotal - salesTaxRemitted > 0
-        ? round2(((retailTotal - salesTaxRemitted - cogs) / (retailTotal - salesTaxRemitted)) * 100)
+        ? round2(((retailTotal - salesTaxRemitted - cogs + cogsOffsets) / (retailTotal - salesTaxRemitted)) * 100)
         : null,
     grossProfitBankBasis: round2(bankTotal - cogs),
     counts: {

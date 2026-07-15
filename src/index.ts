@@ -404,6 +404,9 @@ async function getMonthlyPnl(month: string, forceRefresh: boolean): Promise<Mont
         bankAccountIds: (await getBankAccounts(api)).map((b) => b.id),
         retailIncomeAccountIds: (await getRetailIncomeAccounts(api)).map((r) => r.id),
         itemIncomeAccount: await getItemIncomeMap(api),
+        accountTypes: new Map(
+          (await api.listAccounts()).map((a: any) => [String(a.Id), a.AccountType as string])
+        ),
       },
       month,
       spend.total,
@@ -484,7 +487,7 @@ app.get(
     const months = [];
     const totals = {
       income: 0, incomeDeposits: 0, incomeInvoicePayments: 0, incomeReceipts: 0, incomeRefunds: 0,
-      salesTaxRemitted: 0, revenueNet: 0,
+      salesTaxRemitted: 0, revenueNet: 0, cogsOffsets: 0, expenseOffsets: 0,
       bankInflows: 0, cogs: 0, grossProfit: 0, bookedCogs: 0, vendorCreditsApplied: 0,
     };
     const warnings: string[] = [];
@@ -502,6 +505,8 @@ app.get(
       totals.income += pnl.retailCashIn.total;
       totals.salesTaxRemitted += pnl.salesTaxRemitted ?? 0;
       totals.revenueNet += pnl.revenueNet ?? pnl.retailCashIn.total;
+      totals.cogsOffsets += pnl.cogsOffsets ?? 0;
+      totals.expenseOffsets += pnl.expenseOffsets ?? 0;
       totals.incomeDeposits += pnl.retailCashIn.deposits;
       totals.incomeInvoicePayments += pnl.retailCashIn.invoicePayments;
       totals.incomeReceipts += pnl.retailCashIn.salesReceipts;
