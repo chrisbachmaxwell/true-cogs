@@ -563,8 +563,9 @@ function validRange(req: Request, res: Response): { start: string; end: string; 
     return null;
   }
   const months = monthsBetween(start, end);
-  if (months.length > 24) {
-    res.status(400).json({ error: 'Range too large (max 24 months)' });
+  // 84 months covers the full mirrored history (2020 →) with headroom.
+  if (months.length > 84) {
+    res.status(400).json({ error: 'Range too large (max 84 months)' });
     return null;
   }
   return { start, end, months };

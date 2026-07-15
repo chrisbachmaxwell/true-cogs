@@ -22,7 +22,7 @@
   <div class="banner" id="banner"></div>
 
   <div class="card" style="margin-top:22px">
-    <h2>Monthly — income vs cash COGS <span class="hint">— click a month to open its transactions</span></h2>
+    <h2>Monthly — income vs cash COGS <span class="hint">— click a month to open its transactions · shows up to the last 36 months of the range</span></h2>
     <div class="chart-box"><canvas id="trendChart"></canvas></div>
   </div>
 
@@ -57,7 +57,7 @@ function monthsInRange() {
     list.push(y + '-' + String(m).padStart(2, '0'));
     m++; if (m > 12) { m = 1; y++; }
   }
-  return list.slice(-24);
+  return list.slice(-36);
 }
 
 function buildAcctToggle(accounts) {
