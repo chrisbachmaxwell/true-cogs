@@ -57,13 +57,26 @@ vanilla-JS dashboard with Chart.js.
 
 | Route | Purpose |
 |---|---|
-| `GET /` | Dashboard (month picker, headline number, reconciliation, trailing-12-month chart) |
+| `GET /` | Dashboard (month picker, account view toggle, cash P&L card, reconciliation, trailing-12-month chart) |
 | `GET /health` | 200 OK for Railway's health check |
 | `GET /connect` | Kick off the Intuit OAuth consent flow |
 | `GET /callback` | OAuth redirect target — stores encrypted tokens + `realmId` |
-| `GET /api/inventory-spend?month=YYYY-MM` | `{ total, bucket1Total, bucket2Total, bookedTotal, vendorCreditsApplied, transactions, warnings }` — add `&refresh=1` to bypass the cache |
-| `GET /api/inventory-spend/trend?months=12` | The same math batched over the last N months |
-| `GET /api/status` | Connection status + token staleness warning |
+| `GET /login`, `/auth/*` | Email magic-link sign-in (active when `RESEND_API_KEY` is set) |
+| `GET /api/inventory-spend?month=YYYY-MM` | `{ total, bucket1Total, bucket2Total, bookedTotal, vendorCreditsApplied, transactions, warnings }` — `&refresh=1` bypasses the cache, `&accounts=11901` filters to specific inventory account(s) |
+| `GET /api/inventory-spend/trend?months=12` | The same math batched over the last N months; accepts `&accounts=` too |
+| `GET /api/pnl?month=YYYY-MM` | Cash P&L: retail income received, bank inflows, cash COGS, gross profit/margin |
+| `GET /api/status` | Connection status, tracked accounts, token staleness warning |
+
+## Cash P&L methodology
+
+Income mirrors the COGS method — only money-movement transactions, only the
+portion attributable to the retail income account(s) (`QBO_RETAIL_INCOME_ACCOUNTS`,
+default `40100`): deposit lines coded to the account (POS daily summaries, with
+sales-tax/fee lines excluded automatically), the retail-item portion of
+SalesReceipts (via each item's `IncomeAccountRef`), and invoice Payments
+allocated by the invoice's retail share — with RefundReceipts subtracting and
+journal entries never counted. "Bank inflows" (every deposit into a Bank-type
+account) is reported alongside as the statement-reconcilable reference.
 
 ## Environment variables (Railway)
 
@@ -76,9 +89,16 @@ TOKEN_ENCRYPTION_KEY     # any long random string; encrypts tokens at rest (AES-
 DATABASE_URL             # Railway Postgres plugin provides this automatically
 ```
 
-Optional: `QBO_INVENTORY_ACCOUNT_NAME` (defaults to `Material Inventory`),
-`DATABASE_SSL=true` if connecting to Postgres over Railway's public proxy,
-`PORT` (Railway sets this).
+Optional:
+
+- `QBO_INVENTORY_ACCOUNTS` — comma list of inventory account numbers or names
+  (e.g. `11900,11901`); defaults to `Material Inventory`
+- `QBO_RETAIL_INCOME_ACCOUNTS` — income account(s) for the P&L income line;
+  defaults to `40100`
+- `RESEND_API_KEY` — turns on the email magic-link sign-in gate
+- `AUTH_ALLOWED_EMAILS` — comma list of addresses allowed to sign in
+- `DATABASE_SSL=true` if connecting to Postgres over Railway's public proxy
+- `PORT` (Railway sets this)
 
 ## Deploying on Railway
 
