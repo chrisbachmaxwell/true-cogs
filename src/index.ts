@@ -358,6 +358,35 @@ app.get(
   })
 );
 
+/** Flattens QBO's nested report rows into { name, id, value } leaf accounts. */
+function flattenReportRows(rows: any, out: { name: string; id: string | null; value: number }[] = []) {
+  for (const row of rows?.Row || []) {
+    const col = row.ColData;
+    if (col?.length >= 2 && col[0]?.value) {
+      const value = Number(col[col.length - 1]?.value);
+      if (!Number.isNaN(value)) {
+        out.push({ name: col[0].value, id: col[0].id ?? null, value });
+      }
+    }
+    if (row.Rows) flattenReportRows(row.Rows, out);
+  }
+  return out;
+}
+
+app.get(
+  '/api/balance-sheet',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const asOf = String(req.query.as_of || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(asOf)) {
+      return res.status(400).json({ error: 'Provide ?as_of=YYYY-MM-DD' });
+    }
+    const api = await createQboApi();
+    const report = await api.balanceSheet(asOf);
+    res.json({ asOf, accounts: flattenReportRows(report?.Rows) });
+  })
+);
+
 app.get(
   '/api/status',
   asyncRoute(async (_req, res) => {
