@@ -9,6 +9,8 @@ export interface AppConfig {
   /** Chart-of-accounts entries whose spend we track — each token matches an
    * account number (AcctNum) or exact account name, case-insensitive. */
   inventoryAccounts: string[];
+  /** Income accounts counted as retail sales for the cash P&L (same matching). */
+  retailIncomeAccounts: string[];
   /** Resend API key for magic-link sign-in emails. Auth is enforced only when set. */
   resendApiKey: string | undefined;
   /** Comma-separated allowlist of emails permitted to sign in. */
@@ -29,6 +31,10 @@ export const config: AppConfig = {
   inventoryAccounts: (process.env.QBO_INVENTORY_ACCOUNTS ||
     process.env.QBO_INVENTORY_ACCOUNT_NAME ||
     'Material Inventory')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
+  retailIncomeAccounts: (process.env.QBO_RETAIL_INCOME_ACCOUNTS || '40100')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean),

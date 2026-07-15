@@ -1,33 +1,37 @@
 import { QboApi } from './qbo';
-import { monthDateRange } from './inventorySpend';
+import { monthDateRange, positiveLineTotal } from './inventorySpend';
 
-// Cash-view income for a month, measured two ways — both built only from real
-// money-movement transactions (never journal entries):
+// Cash-view income for a month, mirroring the COGS methodology: only actual
+// money-movement transactions count (never journal entries), and only the
+// portion attributable to the Retail Sales income account(s), e.g. #40100.
 //
-//   Customer money in — SalesReceipts (paid at point of sale) plus Payments
-//   (received against invoices), minus RefundReceipts (money returned). Counted
-//   on the day the customer paid, regardless of when it reached the bank.
+//   Deposits — deposit lines coded straight to a retail income account (how a
+//   POS posts daily sales summaries). The income twin of direct Purchases.
 //
-//   Bank inflows — money that actually hit a Bank-type account this month:
-//   Deposit transactions into bank accounts (undeposited-funds batches, merchant
-//   payouts, any directly recorded deposit) plus SalesReceipts/Payments recorded
-//   straight to a bank account (skipping Undeposited Funds).
+//   SalesReceipts — cash collected at the point of sale; the retail portion is
+//   the sum of lines whose item maps to a retail income account. Refund
+//   receipts subtract the same way.
 //
-// The two differ by settlement timing (a card sale on the 30th lands in the
-// bank in the next month) and by non-sales deposits (loan proceeds, transfers
-// recorded as deposits). Transfers between own accounts (Transfer entity) are
-// excluded from both.
+//   Invoice payments — money received against invoices, allocated by each
+//   invoice's retail share (retail-item lines ÷ positive line total) — the
+//   exact mirror of the BillPayment → Bill inventory ratio.
+//
+// Deposit lines that pull from Undeposited Funds reference the receipt/payment
+// transactions rather than an income account, so nothing is counted twice.
 
 export interface MonthlyPnl {
   month: string;
   startDate: string;
   endDate: string;
-  customerMoneyIn: {
+  /** Cash attributable to the retail income account(s). */
+  retailCashIn: {
+    deposits: number;
     salesReceipts: number;
     invoicePayments: number;
     refunds: number;
     total: number;
   };
+  /** Reference metric: everything that hit Bank-type accounts. */
   bankInflows: {
     deposits: number;
     directSalesReceipts: number;
@@ -36,7 +40,7 @@ export interface MonthlyPnl {
   };
   /** Actual inventory cash spend for the month (both inventory accounts). */
   cogs: number;
-  /** customerMoneyIn.total − cogs */
+  /** retailCashIn.total − cogs */
   grossProfit: number;
   grossMarginPct: number | null;
   /** bankInflows.total − cogs, for the bank-basis view. */
@@ -47,53 +51,132 @@ export interface MonthlyPnl {
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
+/** Sum of deposit lines coded directly to the given income accounts. */
+export function depositRetailPortion(deposit: any, retailIds: Set<string>): number {
+  let sum = 0;
+  for (const line of deposit?.Line || []) {
+    if (
+      line.DetailType === 'DepositLineDetail' &&
+      retailIds.has(line.DepositLineDetail?.AccountRef?.value)
+    ) {
+      sum += Number(line.Amount) || 0;
+    }
+  }
+  return sum;
+}
+
+/** Sum of item-based sale lines whose item maps to a retail income account. */
+export function itemRetailPortion(
+  txn: any,
+  retailIds: Set<string>,
+  itemIncomeAccount: Map<string, string>
+): number {
+  let sum = 0;
+  for (const line of txn?.Line || []) {
+    if (line.DetailType !== 'SalesItemLineDetail') continue;
+    const itemId = line.SalesItemLineDetail?.ItemRef?.value;
+    const incomeAccount = itemId ? itemIncomeAccount.get(itemId) : undefined;
+    if (incomeAccount && retailIds.has(incomeAccount)) {
+      sum += Number(line.Amount) || 0;
+    }
+  }
+  return sum;
+}
+
+export interface PnlContext {
+  bankAccountIds: string[];
+  retailIncomeAccountIds: string[];
+  /** itemId → income account id (from Item.IncomeAccountRef). */
+  itemIncomeAccount: Map<string, string>;
+}
+
 export async function computeMonthlyPnl(
   api: QboApi,
-  bankAccountIds: string[],
+  ctx: PnlContext,
   month: string,
   cogs: number
 ): Promise<MonthlyPnl> {
   const { start, end } = monthDateRange(month);
-  const bankIds = new Set(bankAccountIds);
+  const bankIds = new Set(ctx.bankAccountIds);
+  const retailIds = new Set(ctx.retailIncomeAccountIds);
   const warnings: string[] = [];
 
-  const [salesReceipts, payments, refundReceipts, deposits] = [
-    await api.queryByDateRange('SalesReceipt', start, end),
-    await api.queryByDateRange('Payment', start, end),
-    await api.queryByDateRange('RefundReceipt', start, end),
-    await api.queryByDateRange('Deposit', start, end),
-  ];
+  const salesReceipts = await api.queryByDateRange('SalesReceipt', start, end);
+  const payments = await api.queryByDateRange('Payment', start, end);
+  const refundReceipts = await api.queryByDateRange('RefundReceipt', start, end);
+  const deposits = await api.queryByDateRange('Deposit', start, end);
 
-  const total = (txns: any[]) => txns.reduce((s, t) => s + (Number(t.TotalAmt) || 0), 0);
+  const totalAmt = (txns: any[]) => txns.reduce((s, t) => s + (Number(t.TotalAmt) || 0), 0);
   const toBank = (t: any) => bankIds.has(t.DepositToAccountRef?.value);
 
-  const srTotal = total(salesReceipts);
-  const payTotal = total(payments);
-  const refundTotal = total(refundReceipts);
+  // ---- Retail cash in ----
+  let depositRetail = 0;
+  for (const d of deposits) depositRetail += depositRetailPortion(d, retailIds);
 
-  const bankDeposits = total(deposits.filter(toBank));
-  const directSr = total(salesReceipts.filter(toBank));
-  const directPay = total(payments.filter(toBank));
+  let srRetail = 0;
+  for (const sr of salesReceipts) srRetail += itemRetailPortion(sr, retailIds, ctx.itemIncomeAccount);
 
-  const nonBankDeposits = deposits.filter((d) => !toBank(d));
-  if (nonBankDeposits.length) {
-    warnings.push(
-      `${nonBankDeposits.length} Deposit(s) went to non-bank accounts this month — excluded from bank inflows.`
-    );
+  let refundRetail = 0;
+  for (const rr of refundReceipts) refundRetail += itemRetailPortion(rr, retailIds, ctx.itemIncomeAccount);
+
+  // Invoice payments: allocate each payment line by the linked invoice's retail
+  // share, fetching each invoice once (mirror of the Bill cache in Bucket 1).
+  const invoiceCache = new Map<string, Promise<any>>();
+  const getInvoice = (id: string) => {
+    let p = invoiceCache.get(id);
+    if (!p) {
+      p = api.getInvoice(id);
+      invoiceCache.set(id, p);
+    }
+    return p;
+  };
+
+  let paymentRetail = 0;
+  for (const pay of payments) {
+    for (const line of pay.Line || []) {
+      const linkedInvoice = (line.LinkedTxn || []).find((t: any) => t.TxnType === 'Invoice');
+      if (!linkedInvoice) continue;
+      const invoice = await getInvoice(linkedInvoice.TxnId);
+      const retailPortion = itemRetailPortion(invoice, retailIds, ctx.itemIncomeAccount);
+      const chargeTotal = positiveLineTotal(invoice) || Number(invoice?.TotalAmt) || 0;
+      if (chargeTotal <= 0 || retailPortion <= 0) continue;
+      paymentRetail += (Number(line.Amount) || 0) * (retailPortion / chargeTotal);
+    }
   }
 
-  const customerTotal = round2(srTotal + payTotal - refundTotal);
+  const retailTotal = round2(depositRetail + srRetail + paymentRetail - refundRetail);
+
+  // ---- Bank inflows (reference) ----
+  const bankDeposits = totalAmt(deposits.filter(toBank));
+  const directSr = totalAmt(salesReceipts.filter(toBank));
+  const directPay = totalAmt(payments.filter(toBank));
   const bankTotal = round2(bankDeposits + directSr + directPay);
+
+  const unmappedItems = salesReceipts
+    .concat(refundReceipts)
+    .flatMap((t) => t.Line || [])
+    .filter(
+      (l: any) =>
+        l.DetailType === 'SalesItemLineDetail' &&
+        l.SalesItemLineDetail?.ItemRef?.value &&
+        !ctx.itemIncomeAccount.has(l.SalesItemLineDetail.ItemRef.value)
+    ).length;
+  if (unmappedItems > 0) {
+    warnings.push(
+      `${unmappedItems} sale line(s) reference items with no income-account mapping — treated as non-retail.`
+    );
+  }
 
   return {
     month,
     startDate: start,
     endDate: end,
-    customerMoneyIn: {
-      salesReceipts: round2(srTotal),
-      invoicePayments: round2(payTotal),
-      refunds: round2(refundTotal),
-      total: customerTotal,
+    retailCashIn: {
+      deposits: round2(depositRetail),
+      salesReceipts: round2(srRetail),
+      invoicePayments: round2(paymentRetail),
+      refunds: round2(refundRetail),
+      total: retailTotal,
     },
     bankInflows: {
       deposits: round2(bankDeposits),
@@ -102,8 +185,8 @@ export async function computeMonthlyPnl(
       total: bankTotal,
     },
     cogs: round2(cogs),
-    grossProfit: round2(customerTotal - cogs),
-    grossMarginPct: customerTotal > 0 ? round2(((customerTotal - cogs) / customerTotal) * 100) : null,
+    grossProfit: round2(retailTotal - cogs),
+    grossMarginPct: retailTotal > 0 ? round2(((retailTotal - cogs) / retailTotal) * 100) : null,
     grossProfitBankBasis: round2(bankTotal - cogs),
     counts: {
       salesReceipts: salesReceipts.length,

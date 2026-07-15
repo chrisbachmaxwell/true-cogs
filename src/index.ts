@@ -45,6 +45,7 @@ app.get(
     // Account id can change between companies/environments — re-resolve on reconnect.
     await setConfigValue(ACCOUNTS_KEY, '');
     await setConfigValue('bank_accounts_json', '');
+    await setConfigValue('retail_income_accounts_json', '');
     res.redirect('/?connected=1');
   })
 );
@@ -103,13 +104,13 @@ interface TrackedAccount {
   name: string;
 }
 
-/** Resolves each configured token (account number or exact name, case-insensitive)
+/** Resolves configured tokens (account number or exact name, case-insensitive)
  * against the chart of accounts. Result is cached; /callback clears it. */
-async function resolveInventoryAccounts(api: QboApi): Promise<any[]> {
+async function resolveAccounts(api: QboApi, tokens: string[], hint: RegExp): Promise<any[]> {
   const all = await api.listAccounts();
   const matched: any[] = [];
   const misses: string[] = [];
-  for (const token of config.inventoryAccounts) {
+  for (const token of tokens) {
     const t = token.toLowerCase();
     const hit = all.find(
       (a) =>
@@ -122,12 +123,11 @@ async function resolveInventoryAccounts(api: QboApi): Promise<any[]> {
   }
   if (misses.length) {
     const candidates = all
-      .filter((a) => /inventory/i.test(a.Name || ''))
+      .filter((a) => hint.test(a.Name || ''))
       .map((a) => `${a.AcctNum ? `#${a.AcctNum} ` : ''}${a.Name}`)
       .join(', ');
     throw new Error(
-      `No chart-of-accounts match for: ${misses.join(', ')}. ` +
-        `Accounts containing "inventory": ${candidates || 'none'}`
+      `No chart-of-accounts match for: ${misses.join(', ')}. Similar accounts: ${candidates || 'none'}`
     );
   }
   return matched;
@@ -138,7 +138,11 @@ async function resolveInventoryAccounts(api: QboApi): Promise<any[]> {
 async function getTrackedAccounts(api?: QboApi): Promise<TrackedAccount[]> {
   const cached = await getConfigValue(ACCOUNTS_KEY);
   if (cached) return JSON.parse(cached) as TrackedAccount[];
-  const resolved = await resolveInventoryAccounts(api ?? (await createQboApi()));
+  const resolved = await resolveAccounts(
+    api ?? (await createQboApi()),
+    config.inventoryAccounts,
+    /inventory/i
+  );
   const tracked: TrackedAccount[] = resolved.map((a) => ({
     id: String(a.Id),
     acctNum: a.AcctNum ?? null,
@@ -270,6 +274,45 @@ async function getBankAccounts(api?: QboApi): Promise<TrackedAccount[]> {
   return banks;
 }
 
+const RETAIL_ACCOUNTS_KEY = 'retail_income_accounts_json';
+
+/** Retail income account(s), e.g. #40100 Retail Sales. Cleared on /callback. */
+async function getRetailIncomeAccounts(api: QboApi): Promise<TrackedAccount[]> {
+  const cached = await getConfigValue(RETAIL_ACCOUNTS_KEY);
+  if (cached) return JSON.parse(cached) as TrackedAccount[];
+  const resolved = await resolveAccounts(api, config.retailIncomeAccounts, /sales|income|revenue/i);
+  const tracked: TrackedAccount[] = resolved.map((a) => ({
+    id: String(a.Id),
+    acctNum: a.AcctNum ?? null,
+    name: a.Name,
+  }));
+  await setConfigValue(RETAIL_ACCOUNTS_KEY, JSON.stringify(tracked));
+  console.log(
+    `[qbo] retail income accounts: ${tracked.map((t) => `${t.name} (#${t.acctNum || '?'} → Id ${t.id})`).join(', ')}`
+  );
+  return tracked;
+}
+
+// Item → income-account map. Item catalogs are large, so this is held in memory
+// and refreshed every 6 hours rather than persisted.
+let itemMapCache: { map: Map<string, string>; loadedAt: number } | null = null;
+const ITEM_MAP_TTL_MS = 6 * 60 * 60 * 1000;
+
+async function getItemIncomeMap(api: QboApi): Promise<Map<string, string>> {
+  if (itemMapCache && Date.now() - itemMapCache.loadedAt < ITEM_MAP_TTL_MS) {
+    return itemMapCache.map;
+  }
+  const items = await api.listItems();
+  const map = new Map<string, string>();
+  for (const item of items) {
+    const income = item.IncomeAccountRef?.value;
+    if (income) map.set(String(item.Id), String(income));
+  }
+  console.log(`[qbo] item→income-account map loaded: ${map.size} of ${items.length} items`);
+  itemMapCache = { map, loadedAt: Date.now() };
+  return map;
+}
+
 const inFlightPnl = new Map<string, Promise<MonthlyPnl>>();
 
 async function getMonthlyPnl(month: string, forceRefresh: boolean): Promise<MonthlyPnl> {
@@ -287,8 +330,16 @@ async function getMonthlyPnl(month: string, forceRefresh: boolean): Promise<Mont
   const promise = (async () => {
     const spend = await getMonthlySpend(month, forceRefresh); // combined accounts, cached
     const api = await createQboApi();
-    const banks = await getBankAccounts(api);
-    const result = await computeMonthlyPnl(api, banks.map((b) => b.id), month, spend.total);
+    const result = await computeMonthlyPnl(
+      api,
+      {
+        bankAccountIds: (await getBankAccounts(api)).map((b) => b.id),
+        retailIncomeAccountIds: (await getRetailIncomeAccounts(api)).map((r) => r.id),
+        itemIncomeAccount: await getItemIncomeMap(api),
+      },
+      month,
+      spend.total
+    );
     await setCachedMonth(cacheKey, result);
     return result;
   })().finally(() => inFlightPnl.delete(cacheKey));

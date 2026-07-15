@@ -12,8 +12,11 @@ export interface QboApi {
   /** Runs `SELECT * FROM <entity> WHERE TxnDate >= start AND TxnDate <= end`, fully paginated. */
   queryByDateRange(entity: EntityName, start: string, end: string): Promise<any[]>;
   getBill(id: string): Promise<any>;
+  getInvoice(id: string): Promise<any>;
   /** Full chart of accounts (paginated). */
   listAccounts(): Promise<any[]>;
+  /** Full item list (paginated) — for mapping sale lines to income accounts. */
+  listItems(): Promise<any[]>;
 }
 
 export type EntityName =
@@ -197,6 +200,22 @@ export async function createQboApi(): Promise<QboApi> {
   const tokens = await getFreshTokens();
   const qbo = qboClient(tokens);
 
+  async function listAll(method: string, entityKey: string): Promise<any[]> {
+    const results: any[] = [];
+    let offset = 1;
+    for (;;) {
+      const data = await callFinder(qbo, method, [
+        { field: 'offset', value: offset },
+        { field: 'limit', value: PAGE_SIZE },
+      ]);
+      const page: any[] = data?.QueryResponse?.[entityKey] || [];
+      results.push(...page);
+      if (page.length < PAGE_SIZE) break;
+      offset += PAGE_SIZE;
+    }
+    return results;
+  }
+
   async function queryAll(entity: EntityName, baseCriteria: any[]): Promise<any[]> {
     const method = FINDER_BY_ENTITY[entity];
     const results: any[] = [];
@@ -232,20 +251,20 @@ export async function createQboApi(): Promise<QboApi> {
           })
       );
     },
+    getInvoice(id: string) {
+      return withThrottleAndRetry(
+        `getInvoice(${id})`,
+        () =>
+          new Promise((resolve, reject) => {
+            qbo.getInvoice(id, (err: any, inv: any) => (err ? reject(err) : resolve(inv)));
+          })
+      );
+    },
     async listAccounts() {
-      const results: any[] = [];
-      let offset = 1;
-      for (;;) {
-        const data = await callFinder(qbo, 'findAccounts', [
-          { field: 'offset', value: offset },
-          { field: 'limit', value: PAGE_SIZE },
-        ]);
-        const page: any[] = data?.QueryResponse?.Account || [];
-        results.push(...page);
-        if (page.length < PAGE_SIZE) break;
-        offset += PAGE_SIZE;
-      }
-      return results;
+      return listAll('findAccounts', 'Account');
+    },
+    async listItems() {
+      return listAll('findItems', 'Item');
     },
   };
 }

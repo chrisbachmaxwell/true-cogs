@@ -157,9 +157,9 @@
     <h2>Cash P&amp;L — <span id="pnlMonth"></span> <span style="color:var(--text-muted);font-weight:400">(cash-backed transactions only, no journal entries)</span></h2>
     <div class="tiles" style="grid-template-columns:repeat(4,1fr)" id="pnlTiles">
       <div class="tile">
-        <div class="t-label">Income — customer money in</div>
+        <div class="t-label">Income — retail sales, cash received</div>
         <div class="t-value" id="pnlIncome">—</div>
-        <div class="t-note" id="pnlIncomeNote">Sales receipts + invoice payments − refunds</div>
+        <div class="t-note" id="pnlIncomeNote">Deposits + receipts + invoice payments − refunds, #40100 only</div>
       </div>
       <div class="tile">
         <div class="t-label">Income — hit the bank</div>
@@ -386,18 +386,19 @@ async function loadPnl(forceRefresh) {
     const res = await fetch('/api/pnl?month=' + month + (forceRefresh ? '&refresh=1' : ''));
     const d = await res.json();
     if (!res.ok) throw new Error(d.error || res.statusText);
-    $('pnlIncome').textContent = usd.format(d.customerMoneyIn.total);
+    $('pnlIncome').textContent = usd.format(d.retailCashIn.total);
     $('pnlIncomeNote').textContent =
-      usd.format(d.customerMoneyIn.salesReceipts) + ' receipts + ' +
-      usd.format(d.customerMoneyIn.invoicePayments) + ' payments − ' +
-      usd.format(d.customerMoneyIn.refunds) + ' refunds';
+      usd.format(d.retailCashIn.deposits) + ' deposits + ' +
+      usd.format(d.retailCashIn.salesReceipts) + ' receipts + ' +
+      usd.format(d.retailCashIn.invoicePayments) + ' inv. payments − ' +
+      usd.format(d.retailCashIn.refunds) + ' refunds';
     $('pnlBank').textContent = usd.format(d.bankInflows.total);
     $('pnlBankNote').textContent = d.counts.deposits + ' deposits; differs by settlement timing';
     $('pnlCogs').textContent = usd.format(d.cogs);
     $('pnlGp').textContent = usd.format(d.grossProfit);
     $('pnlGpNote').textContent = d.grossMarginPct !== null
       ? d.grossMarginPct.toFixed(1) + '% margin · bank-basis GP ' + usd.format(d.grossProfitBankBasis)
-      : 'Customer money in − cash COGS';
+      : 'Retail cash in − cash COGS';
   } catch (err) {
     $('pnlGpNote').textContent = 'P&L error: ' + err.message;
   }
