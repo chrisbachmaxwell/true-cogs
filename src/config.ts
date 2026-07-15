@@ -21,6 +21,11 @@ export interface AppConfig {
    * whenever at least one user exists. */
   adminEmail: string | undefined;
   adminInitialPassword: string | undefined;
+  /** Optional service account (e.g. for an agent that tests the live app),
+   * created at boot only if it doesn't already exist. */
+  agentEmail: string | undefined;
+  agentPassword: string | undefined;
+  agentIsAdmin: boolean;
 }
 
 export const config: AppConfig = {
@@ -52,6 +57,9 @@ export const config: AppConfig = {
     .filter(Boolean),
   adminEmail: process.env.ADMIN_EMAIL || 'chrism@pictureline.com',
   adminInitialPassword: process.env.ADMIN_INITIAL_PASSWORD,
+  agentEmail: process.env.AGENT_EMAIL,
+  agentPassword: process.env.AGENT_PASSWORD,
+  agentIsAdmin: process.env.AGENT_IS_ADMIN === 'true',
 };
 
 /** Missing env vars are reported per-feature instead of crashing the whole app,

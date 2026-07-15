@@ -98,18 +98,26 @@ export async function deleteUser(email: string): Promise<void> {
   invalidateEnabledCache();
 }
 
-/** Seeds the first admin from env when the users table is empty. */
+/** Seeds the first admin from env when the users table is empty, and the
+ * optional agent service account whenever it's configured but missing. */
 export async function bootstrapAdmin(): Promise<void> {
   const r = await getPool().query(`SELECT count(*)::int AS n FROM users`);
-  if (r.rows[0].n > 0) return;
-  if (!config.adminEmail || !config.adminInitialPassword) {
-    console.warn(
-      '[auth] no users and no ADMIN_EMAIL/ADMIN_INITIAL_PASSWORD set — dashboard remains open'
-    );
-    return;
+  if (r.rows[0].n === 0) {
+    if (config.adminEmail && config.adminInitialPassword) {
+      await upsertUser(config.adminEmail, config.adminInitialPassword, { isAdmin: true, mustChange: true });
+      console.log(
+        `[auth] seeded first admin ${normalize(config.adminEmail)} (password change required on first sign-in)`
+      );
+    } else {
+      console.warn('[auth] no users and no ADMIN_EMAIL/ADMIN_INITIAL_PASSWORD set — dashboard remains open');
+    }
   }
-  await upsertUser(config.adminEmail, config.adminInitialPassword, { isAdmin: true, mustChange: true });
-  console.log(`[auth] seeded first admin ${normalize(config.adminEmail)} (password change required on first sign-in)`);
+  // Create-only: an admin can reset or remove the agent account from /users
+  // without a redeploy resurrecting the old password.
+  if (config.agentEmail && config.agentPassword && !(await getUser(config.agentEmail))) {
+    await upsertUser(config.agentEmail, config.agentPassword, { isAdmin: config.agentIsAdmin, mustChange: false });
+    console.log(`[auth] seeded agent account ${normalize(config.agentEmail)}${config.agentIsAdmin ? ' (admin)' : ''}`);
+  }
 }
 
 // Auth enforces whenever any user exists. Cached briefly so every request
