@@ -169,7 +169,7 @@
 
   <div class="kpis">
     <div class="kpi">
-      <div class="k-label">Income — cash received</div>
+      <div class="k-label">Revenue — cash, net of sales tax</div>
       <div class="k-value" id="kIncome">—</div>
       <div class="k-note" id="kIncomeNote">All income accounts, money movements only</div>
     </div>
@@ -283,7 +283,8 @@ async function loadStatus() {
 }
 
 function renderSummary(s) {
-  $('kIncome').textContent = usd.format(s.totals.income);
+  $('kIncome').textContent = usd.format(s.totals.revenueNet);
+  $('kIncomeNote').textContent = 'Net of $' + Math.round(s.totals.salesTaxRemitted).toLocaleString('en-US') + ' sales tax remitted';
   $('kCogs').textContent = usd.format(s.totals.cogs);
   $('kGp').textContent = usd.format(s.totals.grossProfit);
   $('kGp').classList.toggle('neg', s.totals.grossProfit < 0);
@@ -297,7 +298,9 @@ function renderSummary(s) {
     ['Invoice payments received', s.totals.incomeInvoicePayments],
     ['Sales receipts', s.totals.incomeReceipts],
     ['Refund receipts', -s.totals.incomeRefunds],
-    ['Income — cash received', s.totals.income, 'total'],
+    ['Money in (tax-inclusive, per POS sync)', s.totals.income, 'total'],
+    ['Less: sales tax remitted', -s.totals.salesTaxRemitted],
+    ['Revenue — net of sales tax', s.totals.revenueNet, 'total'],
     ['Cash COGS', -s.totals.cogs],
     ['Gross profit', s.totals.grossProfit, 'total'],
     ['Bank inflows (reference, incl. tax)', s.totals.bankInflows],

@@ -5,7 +5,7 @@ import { initDb, getConfigValue, setConfigValue, getCachedMonth, setCachedMonth 
 import { buildAuthUri, handleCallback, createQboApi, connectionStatus, QboApi } from './qbo';
 import { computeMonthlySpend, MonthlySpendResult } from './inventorySpend';
 import { computeMonthlyPnl, MonthlyPnl } from './pnl';
-import { computeCashFlow } from './cashflow';
+import { computeCashFlow, reportBalances } from './cashflow';
 import { computeBankFlow } from './bankflow';
 import { monthDateRange } from './inventorySpend';
 import {
@@ -337,6 +337,49 @@ async function getItemIncomeMap(api: QboApi): Promise<Map<string, string>> {
   return map;
 }
 
+const TAX_ACCOUNTS_KEY = 'sales_tax_accounts_json';
+
+/** Sales-tax liability account(s), e.g. #21900. Resolution failure downgrades
+ * to "no netting" with a warning instead of breaking the P&L. */
+async function getSalesTaxAccounts(api: QboApi): Promise<TrackedAccount[]> {
+  const cached = readAccountCache(await getConfigValue(TAX_ACCOUNTS_KEY), config.salesTaxAccounts);
+  if (cached) return cached;
+  let tracked: TrackedAccount[] = [];
+  try {
+    const resolved = await resolveAccounts(api, config.salesTaxAccounts, /tax/i);
+    tracked = resolved.map((a) => ({ id: String(a.Id), acctNum: a.AcctNum ?? null, name: a.Name }));
+  } catch (err: any) {
+    console.warn('[qbo] sales-tax account resolution failed:', err.message);
+    return [];
+  }
+  await setConfigValue(TAX_ACCOUNTS_KEY, JSON.stringify({ tokens: config.salesTaxAccounts, accounts: tracked }));
+  return tracked;
+}
+
+/** Cash remitted to the sales-tax account(s) in a month: the same payment-
+ * tracing engine as COGS, pointed at the tax liability account. If no
+ * remittance transactions are visible (Sales-Tax-Center payments are hidden
+ * from the API), falls back to the tax account's balance-sheet movement. */
+async function getSalesTaxRemitted(api: QboApi, month: string): Promise<{ amount: number; source: string }> {
+  const taxAccounts = await getSalesTaxAccounts(api);
+  if (!taxAccounts.length) return { amount: 0, source: 'none' };
+  const taxIds = taxAccounts.map((t) => t.id);
+  const spend = await computeMonthlySpend(api, taxIds, month);
+  if (spend.total > 0) return { amount: spend.total, source: 'transactions' };
+  try {
+    const { start, end } = monthDateRange(month);
+    const [before, after] = [await api.balanceSheet(dayBefore(start)), await api.balanceSheet(end)];
+    const b = reportBalances(before);
+    const a = reportBalances(after);
+    let delta = 0;
+    for (const id of taxIds) delta += (a.get(id)?.value ?? 0) - (b.get(id)?.value ?? 0);
+    // Balance falling = remittances exceeding recorded collections.
+    return { amount: Math.max(0, Math.round(-delta * 100) / 100), source: 'balance-sheet' };
+  } catch {
+    return { amount: 0, source: 'unavailable' };
+  }
+}
+
 const inFlightPnl = new Map<string, Promise<MonthlyPnl>>();
 
 async function getMonthlyPnl(month: string, forceRefresh: boolean): Promise<MonthlyPnl> {
@@ -354,6 +397,7 @@ async function getMonthlyPnl(month: string, forceRefresh: boolean): Promise<Mont
   const promise = (async () => {
     const spend = await getMonthlySpend(month, forceRefresh); // combined accounts, cached
     const api = await createQboApi();
+    const tax = await getSalesTaxRemitted(api, month);
     const result = await computeMonthlyPnl(
       api,
       {
@@ -362,8 +406,14 @@ async function getMonthlyPnl(month: string, forceRefresh: boolean): Promise<Mont
         itemIncomeAccount: await getItemIncomeMap(api),
       },
       month,
-      spend.total
+      spend.total,
+      tax.amount
     );
+    if (tax.source === 'balance-sheet') {
+      result.warnings.push(
+        'Sales tax remitted derived from the tax account balance movement (remittance transactions not visible to the API).'
+      );
+    }
     await setCachedMonth(cacheKey, result);
     return result;
   })().finally(() => inFlightPnl.delete(cacheKey));
@@ -434,6 +484,7 @@ app.get(
     const months = [];
     const totals = {
       income: 0, incomeDeposits: 0, incomeInvoicePayments: 0, incomeReceipts: 0, incomeRefunds: 0,
+      salesTaxRemitted: 0, revenueNet: 0,
       bankInflows: 0, cogs: 0, grossProfit: 0, bookedCogs: 0, vendorCreditsApplied: 0,
     };
     const warnings: string[] = [];
@@ -449,6 +500,8 @@ app.get(
         booked: spend.bookedTotal,
       });
       totals.income += pnl.retailCashIn.total;
+      totals.salesTaxRemitted += pnl.salesTaxRemitted ?? 0;
+      totals.revenueNet += pnl.revenueNet ?? pnl.retailCashIn.total;
       totals.incomeDeposits += pnl.retailCashIn.deposits;
       totals.incomeInvoicePayments += pnl.retailCashIn.invoicePayments;
       totals.incomeReceipts += pnl.retailCashIn.salesReceipts;
@@ -467,13 +520,25 @@ app.get(
       end: range.end,
       totals: {
         ...totals,
-        grossMarginPct: totals.income > 0 ? r2((totals.grossProfit / totals.income) * 100) : null,
+        grossMarginPct: totals.revenueNet > 0 ? r2((totals.grossProfit / totals.revenueNet) * 100) : null,
       },
       months,
       warnings,
     });
   })
 );
+
+// Long-running range computations share one in-flight promise per cache key,
+// so repeated requests (edge timeouts, impatient reloads) can't stack work.
+const inFlightRange = new Map<string, Promise<any>>();
+
+function dedupe<T>(key: string, compute: () => Promise<T>): Promise<T> {
+  const existing = inFlightRange.get(key);
+  if (existing) return existing as Promise<T>;
+  const p = compute().finally(() => inFlightRange.delete(key));
+  inFlightRange.set(key, p);
+  return p;
+}
 
 const dayBefore = (isoDate: string) => {
   const d = new Date(`${isoDate}T00:00:00Z`);
@@ -498,9 +563,12 @@ app.get(
         return res.json(cached.data);
       }
     }
-    const api = await createQboApi();
-    const result = await computeCashFlow(api, asOfStart, asOfEnd);
-    await setCachedMonth(cacheKey, result);
+    const result = await dedupe(cacheKey, async () => {
+      const api = await createQboApi();
+      const r = await computeCashFlow(api, asOfStart, asOfEnd);
+      await setCachedMonth(cacheKey, r);
+      return r;
+    });
     res.json(result);
   })
 );
@@ -523,21 +591,24 @@ app.get(
         return res.json(cached.data);
       }
     }
-    const api = await createQboApi();
-    const banks = await getBankAccounts(api);
-    const inventoryIds = (await getTrackedAccounts(api)).map((t) => t.id);
-    // Actual bank change comes from the balance-sheet diff at the range edges.
-    let actualBankChange: number | null = null;
-    try {
-      const cf = await computeCashFlow(api, dayBefore(startDate), endDate);
-      actualBankChange = cf.bankChange;
-    } catch (err: any) {
-      console.warn('[bank-flow] balance sheet unavailable:', err.message);
-    }
-    const result = await computeBankFlow(
-      api, banks.map((b) => b.id), inventoryIds, startDate, endDate, actualBankChange
-    );
-    await setCachedMonth(cacheKey, result);
+    const result = await dedupe(cacheKey, async () => {
+      const api = await createQboApi();
+      const banks = await getBankAccounts(api);
+      const inventoryIds = (await getTrackedAccounts(api)).map((t) => t.id);
+      // Actual bank change comes from the balance-sheet diff at the range edges.
+      let actualBankChange: number | null = null;
+      try {
+        const cf = await computeCashFlow(api, dayBefore(startDate), endDate);
+        actualBankChange = cf.bankChange;
+      } catch (err: any) {
+        console.warn('[bank-flow] balance sheet unavailable:', err.message);
+      }
+      const r = await computeBankFlow(
+        api, banks.map((b) => b.id), inventoryIds, startDate, endDate, actualBankChange
+      );
+      await setCachedMonth(cacheKey, r);
+      return r;
+    });
     res.json(result);
   })
 );

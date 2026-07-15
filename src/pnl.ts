@@ -38,9 +38,14 @@ export interface MonthlyPnl {
     directInvoicePayments: number;
     total: number;
   };
+  /** Sales tax remitted this month — deducted from revenue because the POS
+   * sync books tax-inclusive amounts into the income accounts. */
+  salesTaxRemitted: number;
+  /** retailCashIn.total − salesTaxRemitted: revenue that is actually yours. */
+  revenueNet: number;
   /** Actual inventory cash spend for the month (both inventory accounts). */
   cogs: number;
-  /** retailCashIn.total − cogs */
+  /** revenueNet − cogs */
   grossProfit: number;
   grossMarginPct: number | null;
   /** bankInflows.total − cogs, for the bank-basis view. */
@@ -94,7 +99,8 @@ export async function computeMonthlyPnl(
   api: QboApi,
   ctx: PnlContext,
   month: string,
-  cogs: number
+  cogs: number,
+  salesTaxRemitted = 0
 ): Promise<MonthlyPnl> {
   const { start, end } = monthDateRange(month);
   const bankIds = new Set(ctx.bankAccountIds);
@@ -197,9 +203,14 @@ export async function computeMonthlyPnl(
       directInvoicePayments: round2(directPay),
       total: bankTotal,
     },
+    salesTaxRemitted: round2(salesTaxRemitted),
+    revenueNet: round2(retailTotal - salesTaxRemitted),
     cogs: round2(cogs),
-    grossProfit: round2(retailTotal - cogs),
-    grossMarginPct: retailTotal > 0 ? round2(((retailTotal - cogs) / retailTotal) * 100) : null,
+    grossProfit: round2(retailTotal - salesTaxRemitted - cogs),
+    grossMarginPct:
+      retailTotal - salesTaxRemitted > 0
+        ? round2(((retailTotal - salesTaxRemitted - cogs) / (retailTotal - salesTaxRemitted)) * 100)
+        : null,
     grossProfitBankBasis: round2(bankTotal - cogs),
     counts: {
       salesReceipts: salesReceipts.length,

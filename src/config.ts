@@ -11,6 +11,9 @@ export interface AppConfig {
   inventoryAccounts: string[];
   /** Income accounts counted as retail sales for the cash P&L (same matching). */
   retailIncomeAccounts: string[];
+  /** Sales-tax liability account(s): remittances to them are deducted from
+   * revenue, because the POS sync books tax-inclusive amounts into income. */
+  salesTaxAccounts: string[];
   /** Resend API key for magic-link sign-in emails. Auth is enforced only when set. */
   resendApiKey: string | undefined;
   /** Comma-separated allowlist of emails permitted to sign in. */
@@ -35,6 +38,10 @@ export const config: AppConfig = {
     .map((s) => s.trim())
     .filter(Boolean),
   retailIncomeAccounts: (process.env.QBO_RETAIL_INCOME_ACCOUNTS || '40100')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
+  salesTaxAccounts: (process.env.QBO_SALES_TAX_ACCOUNTS || '21900')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean),
