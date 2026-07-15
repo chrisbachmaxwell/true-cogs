@@ -65,17 +65,31 @@ test('POS daily-summary deposit: only income lines count; tax and fees excluded'
   assert.equal(r.bankInflows.total, 10450);
 });
 
-test('customer payments and receipts count at full tax-inclusive value; refunds subtract', async () => {
+test('bank-landed payments and receipts count at full tax-inclusive value; refunds subtract', async () => {
   const api = mockApi({
-    SalesReceipt: [{ TotalAmt: 1300, DepositToAccountRef: { value: UNDEPOSITED } }],
-    Payment: [{ TotalAmt: 2140 }], // invoice payment incl. tax/shipping — counts in full
-    RefundReceipt: [{ TotalAmt: 200 }],
+    SalesReceipt: [{ TotalAmt: 1300, DepositToAccountRef: { value: BANK } }],
+    Payment: [{ TotalAmt: 2140, DepositToAccountRef: { value: BANK } }],
+    RefundReceipt: [{ TotalAmt: 200, DepositToAccountRef: { value: BANK } }],
   });
   const r = await computeMonthlyPnl(api, ctx(), '2026-06', 0);
   assert.equal(r.retailCashIn.salesReceipts, 1300);
   assert.equal(r.retailCashIn.invoicePayments, 2140);
   assert.equal(r.retailCashIn.refunds, 200);
   assert.equal(r.retailCashIn.total, 3240);
+});
+
+test('payments settled into non-bank accounts (store credit) are excluded and flagged', async () => {
+  const api = mockApi({
+    Payment: [
+      { TotalAmt: 1000, DepositToAccountRef: { value: BANK } },
+      { TotalAmt: 750, DepositToAccountRef: { value: 'credit-memos-asset' } },
+      { TotalAmt: 50 }, // no deposit account at all
+    ],
+  });
+  const r = await computeMonthlyPnl(api, ctx(), '2026-06', 0);
+  assert.equal(r.retailCashIn.invoicePayments, 1000);
+  assert.equal(r.retailCashIn.total, 1000);
+  assert.ok(r.warnings.some((w) => w.includes('800.00')));
 });
 
 test('sales tax remitted nets against revenue exactly once', async () => {

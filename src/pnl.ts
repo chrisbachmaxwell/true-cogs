@@ -156,10 +156,21 @@ export async function computeMonthlyPnl(
   // Customer money in counts at full, tax-inclusive value — the same convention
   // the POS deposits carry — so sales tax is deducted exactly once, via the
   // remittance line. Costs of every invoiced element (shipping, fees) sit in
-  // expenses, so their revenue counts too.
-  const srRetail = totalAmt(salesReceipts);
-  const refundRetail = totalAmt(refundReceipts);
-  const paymentRetail = totalAmt(payments);
+  // expenses, so their revenue counts too. BUT only when the cash actually
+  // landed in a bank account: payments settled into non-bank accounts (e.g.
+  // store-credit via a Credit Memos asset account) moved no money.
+  const bankLanded = (txns: any[]) => txns.filter((t) => toBank(t));
+  const srRetail = totalAmt(bankLanded(salesReceipts));
+  const refundRetail = totalAmt(bankLanded(refundReceipts));
+  const paymentRetail = totalAmt(bankLanded(payments));
+  const nonBankCustomerCash = round2(
+    totalAmt(payments) + totalAmt(salesReceipts) - paymentRetail - srRetail
+  );
+  if (nonBankCustomerCash > 0) {
+    warnings.push(
+      `$${nonBankCustomerCash.toFixed(2)} of customer payments/receipts settled into non-bank accounts (store credit etc.) — no cash moved, excluded from income.`
+    );
+  }
 
   const retailTotal = round2(depositRetail + srRetail + paymentRetail - refundRetail);
 
