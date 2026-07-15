@@ -671,6 +671,45 @@ app.get(
   })
 );
 
+/** Where customer Payment cash landed: grouped by DepositToAccountRef. */
+app.get(
+  '/api/payments-audit',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const range = validRange(req, res);
+    if (!range) return;
+    const startDate = monthDateRange(range.start).start;
+    const endDate = monthDateRange(range.end).end;
+    const api = await createQboApi();
+    const [payments, receipts, accounts] = [
+      await api.queryByDateRange('Payment', startDate, endDate),
+      await api.queryByDateRange('SalesReceipt', startDate, endDate),
+      await api.listAccounts(),
+    ];
+    const meta = new Map(accounts.map((a: any) => [String(a.Id), a]));
+    const summarize = (txns: any[]) => {
+      const by = new Map<string, { name: string; type: string; amount: number; count: number }>();
+      for (const t of txns) {
+        const ref = t.DepositToAccountRef?.value;
+        const key = ref ? String(ref) : 'none';
+        const acct = ref ? meta.get(String(ref)) : null;
+        const cur = by.get(key) || {
+          name: acct?.Name || (ref ? `Account ${ref}` : 'No deposit account set'),
+          type: acct?.AccountType || 'Unknown',
+          amount: 0,
+          count: 0,
+        };
+        cur.amount += Number(t.TotalAmt) || 0;
+        cur.count++;
+        by.set(key, cur);
+      }
+      return [...by.values()].map((v) => ({ ...v, amount: Math.round(v.amount * 100) / 100 }))
+        .sort((a, b) => b.amount - a.amount);
+    };
+    res.json({ start: startDate, end: endDate, payments: summarize(payments), salesReceipts: summarize(receipts) });
+  })
+);
+
 app.get(
   '/api/accounts',
   requireAuth,
