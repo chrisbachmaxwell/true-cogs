@@ -1276,6 +1276,75 @@ app.get(
   })
 );
 
+/** Every payment drawn from a given account, with the bills each one paid and
+ * any vendor credits applied — the working data for cleaning up the "ACH"
+ * clearing-account era (void payment → re-apply credits → match feed twin). */
+app.get(
+  '/api/funding-payments',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const range = validDateRange(req, res);
+    if (!range) return;
+    const token = String(req.query.account || '');
+    if (!token) return res.status(400).json({ error: 'Provide ?account=<name or number>' });
+    const api = await getComputeApi();
+    const match = await resolveAccounts(api, [token], /./);
+    const accountId = String(match[0].Id);
+    const payments: any[] = [];
+    for (const bp of await api.queryByDateRange('BillPayment', range.start, range.end)) {
+      const funding =
+        bp.CheckPayment?.BankAccountRef?.value || bp.CreditCardPayment?.CCAccountRef?.value;
+      if (String(funding) !== accountId) continue;
+      const bills: any[] = [];
+      let creditsApplied = 0;
+      for (const line of bp.Line || []) {
+        for (const lt of line.LinkedTxn || []) {
+          if (lt.TxnType === 'Bill') bills.push({ id: String(lt.TxnId), amount: Number(line.Amount) || 0 });
+          if (lt.TxnType === 'VendorCredit') creditsApplied += Number(line.Amount) || 0;
+        }
+      }
+      // Bill doc numbers make the checklist human-usable.
+      for (const b of bills) {
+        try {
+          const bill = await api.getBill(b.id);
+          b.docNumber = bill?.DocNumber || null;
+          b.billTotal = Number(bill?.TotalAmt) || null;
+        } catch { b.docNumber = null; }
+      }
+      payments.push({
+        date: bp.TxnDate,
+        vendor: bp.VendorRef?.name || 'Unknown vendor',
+        total: Number(bp.TotalAmt) || 0,
+        txnId: String(bp.Id),
+        txnType: 'BillPayment',
+        bills,
+        creditsApplied: Math.round(creditsApplied * 100) / 100,
+      });
+    }
+    for (const p of await api.queryByDateRange('Purchase', range.start, range.end)) {
+      if (String(p.AccountRef?.value) !== accountId) continue;
+      payments.push({
+        date: p.TxnDate,
+        vendor: p.EntityRef?.name || 'Unknown payee',
+        total: (p.Credit === true ? -1 : 1) * (Number(p.TotalAmt) || 0),
+        txnId: String(p.Id),
+        txnType: p.PaymentType === 'Check' ? 'Check' : 'Purchase',
+        bills: [],
+        creditsApplied: 0,
+      });
+    }
+    payments.sort((a, b) => a.vendor.localeCompare(b.vendor) || a.date.localeCompare(b.date));
+    res.json({
+      account: { id: accountId, name: match[0].Name },
+      start: range.start,
+      end: range.end,
+      count: payments.length,
+      total: Math.round(payments.reduce((s, p) => s + p.total, 0) * 100) / 100,
+      payments,
+    });
+  })
+);
+
 // ---- automated reconciliation checks ----
 // Every methodology bug found while building this app was caught by one of
 // these tie-outs run by hand; this endpoint runs them all for any range.
