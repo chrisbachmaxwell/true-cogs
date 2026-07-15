@@ -505,8 +505,18 @@ async function getSalesTaxRemitted(api: QboApi, month: string): Promise<{ amount
     const a = reportBalances(after);
     let delta = 0;
     for (const id of taxIds) delta += (a.get(id)?.value ?? 0) - (b.get(id)?.value ?? 0);
-    // Balance falling = remittances exceeding recorded collections.
-    return { amount: Math.max(0, Math.round(-delta * 100) / 100), source: 'balance-sheet' };
+    // Accrual-aware: JE credits of collected tax raise the balance without cash
+    // moving, so remitted = accruals − balance change (old behavior when no JEs).
+    const taxIdSet = new Set(taxIds.map(String));
+    let jeAccruals = 0;
+    for (const je of await api.queryByDateRange('JournalEntry', start, end)) {
+      for (const l of je.Line || []) {
+        const d = l.JournalEntryLineDetail;
+        if (!d || !taxIdSet.has(String(d.AccountRef?.value))) continue;
+        jeAccruals += (d.PostingType === 'Credit' ? 1 : -1) * (Number(l.Amount) || 0);
+      }
+    }
+    return { amount: Math.max(0, Math.round((jeAccruals - delta) * 100) / 100), source: 'balance-sheet' };
   } catch {
     return { amount: 0, source: 'unavailable' };
   }
@@ -1339,14 +1349,27 @@ app.get(
         const after = reportBalances(await api.balanceSheet(range.end));
         let delta = 0;
         for (const id of taxIds) delta += (after.get(id)?.value ?? 0) - (before.get(id)?.value ?? 0);
-        const ledgerRemitted = Math.round(-delta * 100) / 100;
+        // Accrual-aware: monthly JEs crediting collected tax into the liability
+        // (Chris's regime from 2026-07 onward) raise the balance without any cash
+        // moving, so remitted = JE accruals − balance change. With no JEs this
+        // reduces to the old “balance went down by what was remitted”.
+        const taxIdSet = new Set(taxIds.map(String));
+        let jeAccruals = 0;
+        for (const je of await api.queryByDateRange('JournalEntry', range.start, range.end)) {
+          for (const l of je.Line || []) {
+            const d = l.JournalEntryLineDetail;
+            if (!d || !taxIdSet.has(String(d.AccountRef?.value))) continue;
+            jeAccruals += (d.PostingType === 'Credit' ? 1 : -1) * (Number(l.Amount) || 0);
+          }
+        }
+        const ledgerRemitted = Math.round((jeAccruals - delta) * 100) / 100;
         const tol = Math.max(1, stmt.income.salesTaxRemitted * 0.001);
         taxCheck = {
           ...taxCheck,
           status: near(ledgerRemitted, stmt.income.salesTaxRemitted, tol) ? 'pass' : 'fail',
           expected: ledgerRemitted,
           explain:
-            'The tax deducted from revenue should equal how much the sales-tax account actually went down. A mismatch means tax was deducted too much or too little.',
+            'The tax deducted from revenue should equal what actually left the tax account (journal-entry accruals minus the balance change). A mismatch means tax was deducted too much or too little.',
         };
       }
     } catch {
