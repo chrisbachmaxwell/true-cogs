@@ -767,6 +767,124 @@ app.get(
   })
 );
 
+/** Day-granular date range: ?start=YYYY-MM-DD&end=YYYY-MM-DD (also accepts
+ * YYYY-MM, expanded to the whole month — June means through June 30). */
+function validDateRange(req: Request, res: Response): { start: string; end: string } | null {
+  let start = String(req.query.start || '');
+  let end = String(req.query.end || '');
+  if (/^\d{4}-\d{2}$/.test(start)) start = monthDateRange(start).start;
+  if (/^\d{4}-\d{2}$/.test(end)) end = monthDateRange(end).end;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end) || start > end) {
+    res.status(400).json({ error: 'Provide ?start=YYYY-MM-DD&end=YYYY-MM-DD (start <= end)' });
+    return null;
+  }
+  return { start, end };
+}
+
+/** Full cash P&L statement for an exact date range, with the operating-expense
+ * section pulled from the books' accrual P&L for the same period. */
+app.get(
+  '/api/pnl-statement',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const range = validDateRange(req, res);
+    if (!range) return;
+    const cacheKey = `stmt:${range.start}:${range.end}`;
+    if (req.query.refresh !== '1') {
+      const cached = await getCachedMonth(cacheKey);
+      const closed = range.end < new Date().toISOString().slice(0, 10);
+      if (cached && (closed || Date.now() - new Date(cached.computedAt).getTime() < CURRENT_MONTH_CACHE_TTL_MS)) {
+        return res.json(cached.data);
+      }
+    }
+    const result = await dedupe(cacheKey, async () => {
+      const api = await getComputeApi();
+      const inventoryIds = (await getTrackedAccounts(api)).map((t) => t.id);
+      const spend = await computeMonthlySpend(api, inventoryIds, range);
+      const taxIds = (await getSalesTaxAccounts(api)).map((t) => t.id);
+      const taxRemitted = taxIds.length ? (await computeMonthlySpend(api, taxIds, range)).total : 0;
+      const directIds = (await getDirectCostAccounts(api)).map((t) => t.id);
+      const directCosts = directIds.length ? (await computeMonthlySpend(api, directIds, range)).total : 0;
+      const pnl = await computeMonthlyPnl(
+        api,
+        {
+          bankAccountIds: (await getBankAccounts(api)).map((b) => b.id),
+          retailIncomeAccountIds: (await getRetailIncomeAccounts(api)).map((r) => r.id),
+          accountTypes: new Map(
+            (await api.listAccounts()).map((a: any) => [String(a.Id), a.AccountType as string])
+          ),
+        },
+        range,
+        spend.total,
+        taxRemitted,
+        directCosts
+      );
+      // Operating expenses come from the books' accrual P&L for the same period.
+      let expenses: { total: number; rows: { name: string; amount: number }[] } = { total: 0, rows: [] };
+      try {
+        const report = await api.profitAndLoss(range.start, range.end);
+        const walk = (rows: any, inExpenses: boolean) => {
+          for (const row of rows?.Row || []) {
+            const header = row.Header?.ColData?.[0]?.value || '';
+            const isExpenseSection = inExpenses || header === 'Expenses';
+            if (row.Summary && header === 'Expenses') {
+              expenses.total = Number(row.Summary.ColData?.[1]?.value) || 0;
+            }
+            const col = row.ColData;
+            if (isExpenseSection && col?.length >= 2 && col[0]?.value) {
+              const amt = Number(col[col.length - 1]?.value);
+              if (!Number.isNaN(amt) && amt !== 0) expenses.rows.push({ name: col[0].value, amount: amt });
+            }
+            if (row.Rows) walk(row.Rows, isExpenseSection);
+          }
+        };
+        walk(report?.Rows, false);
+        expenses.rows.sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+        expenses.rows = expenses.rows.slice(0, 30);
+      } catch (err: any) {
+        console.warn('[pnl-statement] expense report unavailable:', err.message);
+      }
+      const r2 = (n: number) => Math.round(n * 100) / 100;
+      const expensesNet = r2(expenses.total - pnl.expenseOffsets);
+      const statement = {
+        start: range.start,
+        end: range.end,
+        income: {
+          moneyIn: pnl.retailCashIn.total,
+          deposits: pnl.retailCashIn.deposits,
+          invoicePayments: pnl.retailCashIn.invoicePayments,
+          salesReceipts: pnl.retailCashIn.salesReceipts,
+          refunds: pnl.retailCashIn.refunds,
+          salesTaxRemitted: pnl.salesTaxRemitted,
+          netRevenue: pnl.revenueNet,
+        },
+        cogs: {
+          inventoryCash: pnl.cogs,
+          directCosts: pnl.directCosts,
+          rebateOffsets: pnl.cogsOffsets,
+          total: r2(pnl.cogs + pnl.directCosts - pnl.cogsOffsets),
+          bookedReference: spend.bookedTotal,
+          vendorCreditsApplied: spend.vendorCreditsApplied,
+        },
+        grossProfit: pnl.grossProfit,
+        grossMarginPct: pnl.grossMarginPct,
+        expenses: {
+          totalFromBooks: expenses.total,
+          reimbursements: pnl.expenseOffsets,
+          net: expensesNet,
+          rows: expenses.rows,
+        },
+        noi: r2(pnl.grossProfit - expensesNet),
+        bankInflows: pnl.bankInflows.total,
+        warnings: pnl.warnings,
+      };
+      await setCachedMonth(cacheKey, statement);
+      return statement;
+    });
+    res.json(result);
+  })
+);
+
 /** Trigger a sync of the raw-transaction mirror. ?full=1 re-pulls the window. */
 app.get(
   '/api/sync',
@@ -837,10 +955,16 @@ app.get(
   })
 );
 
-// No express.static: the dashboard must only be reachable through the auth gate.
-app.get(['/', '/index.html'], requireAuth, (_req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
-});
+// No express.static: report pages are only reachable through the auth gate.
+// Style/script assets carry no data and are served openly.
+const pub = (f: string) => path.join(__dirname, '..', 'public', f);
+app.get('/theme.css', (_req, res) => res.sendFile(pub('theme.css')));
+app.get('/app.js', (_req, res) => res.sendFile(pub('app.js')));
+app.get(['/', '/index.html'], requireAuth, (_req, res) => res.sendFile(pub('index.html')));
+app.get('/pnl', requireAuth, (_req, res) => res.sendFile(pub('pnl.html')));
+app.get('/bank', requireAuth, (_req, res) => res.sendFile(pub('bank.html')));
+app.get('/cashflow', requireAuth, (_req, res) => res.sendFile(pub('cashflow.html')));
+app.get('/inventory', requireAuth, (_req, res) => res.sendFile(pub('inventory.html')));
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {

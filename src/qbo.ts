@@ -21,6 +21,8 @@ export interface QboApi {
   listItems(): Promise<any[]>;
   /** Balance sheet report as of a date (raw QBO report payload). */
   balanceSheet(asOfDate: string): Promise<any>;
+  /** Accrual P&L report for a date range (raw QBO report payload). */
+  profitAndLoss(startDate: string, endDate: string): Promise<any>;
 }
 
 export type EntityName =
@@ -284,6 +286,18 @@ export async function createQboApi(): Promise<QboApi> {
           new Promise((resolve, reject) => {
             qbo.reportBalanceSheet(
               { start_date: asOfDate, end_date: asOfDate, accounting_method: 'Accrual' },
+              (err: any, report: any) => (err ? reject(err) : resolve(report))
+            );
+          })
+      );
+    },
+    profitAndLoss(startDate: string, endDate: string) {
+      return withThrottleAndRetry(
+        `profitAndLoss(${startDate}..${endDate})`,
+        () =>
+          new Promise((resolve, reject) => {
+            qbo.reportProfitAndLoss(
+              { start_date: startDate, end_date: endDate, accounting_method: 'Accrual' },
               (err: any, report: any) => (err ? reject(err) : resolve(report))
             );
           })

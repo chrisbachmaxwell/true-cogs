@@ -98,11 +98,13 @@ export function monthDateRange(month: string): { start: string; end: string } {
 export async function computeMonthlySpend(
   api: QboApi,
   inventoryAccountIds: AccountIds,
-  month: string
+  monthOrRange: string | { start: string; end: string }
 ): Promise<MonthlySpendResult> {
   const accountIdList = Array.isArray(inventoryAccountIds) ? inventoryAccountIds : [inventoryAccountIds];
   const accountIdSet = new Set(accountIdList);
-  const { start, end } = monthDateRange(month);
+  const { start, end } =
+    typeof monthOrRange === 'string' ? monthDateRange(monthOrRange) : monthOrRange;
+  const month = typeof monthOrRange === 'string' ? monthOrRange : `${start}..${end}`;
   const transactions: SpendTransaction[] = [];
   const warnings: string[] = [];
 

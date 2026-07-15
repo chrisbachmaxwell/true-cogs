@@ -153,5 +153,6 @@ export function makeLocalApi(remote: QboApi): QboApi {
     },
     listItems: () => remote.listItems(),
     balanceSheet: (asOf) => remote.balanceSheet(asOf),
+    profitAndLoss: (s, e) => remote.profitAndLoss(s, e),
   };
 }

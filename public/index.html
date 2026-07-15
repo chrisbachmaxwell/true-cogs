@@ -3,563 +3,79 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pictureline · Cash Dashboard</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-<style>
-  :root {
-    color-scheme: light;
-    --page: #f9f9f7;
-    --surface-1: #fcfcfb;
-    --text-primary: #0b0b0b;
-    --text-secondary: #52514e;
-    --text-muted: #898781;
-    --grid: #e1e0d9;
-    --baseline: #c3c2b7;
-    --border: rgba(11, 11, 11, 0.10);
-    --series-1: #2a78d6;
-    --pos: #2a78d6;
-    --neg: #e34948;
-    --good-text: #006300;
-    --warning-bg: #fff7e6;
-    --warning-border: #fab219;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      color-scheme: dark;
-      --page: #0d0d0d;
-      --surface-1: #1a1a19;
-      --text-primary: #ffffff;
-      --text-secondary: #c3c2b7;
-      --text-muted: #898781;
-      --grid: #2c2c2a;
-      --baseline: #383835;
-      --border: rgba(255, 255, 255, 0.10);
-      --series-1: #3987e5;
-      --pos: #3987e5;
-      --neg: #e66767;
-      --good-text: #0ca30c;
-      --warning-bg: #2b2210;
-      --warning-border: #fab219;
-    }
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    background: var(--page);
-    color: var(--text-primary);
-    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-    font-size: 14px;
-    line-height: 1.45;
-  }
-  .wrap { max-width: 1120px; margin: 0 auto; padding: 20px 20px 72px; }
-
-  header {
-    display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
-    padding: 6px 0 18px;
-  }
-  header h1 { font-size: 17px; font-weight: 650; margin: 0; letter-spacing: -0.01em; }
-  header .sub { color: var(--text-muted); font-size: 12px; margin-top: 1px; }
-  .controls { margin-left: auto; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  select, input[type="month"], button {
-    font: inherit; font-size: 13px;
-    color: var(--text-primary);
-    background: var(--surface-1);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 7px 10px;
-  }
-  button { cursor: pointer; }
-  button:hover, select:hover { border-color: var(--baseline); }
-  .range-sep { color: var(--text-muted); }
-  a.quiet { color: var(--text-muted); font-size: 12px; text-decoration: none; }
-  a.quiet:hover { color: var(--text-secondary); }
-
-  .banner {
-    border: 1px solid var(--warning-border);
-    background: var(--warning-bg);
-    border-radius: 10px;
-    padding: 10px 14px;
-    margin-bottom: 14px;
-    display: none;
-    font-size: 13px;
-  }
-  .banner.show { display: block; }
-
-  .card {
-    background: var(--surface-1);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 20px 22px;
-  }
-  h2 { font-size: 13px; font-weight: 600; margin: 0 0 14px; color: var(--text-secondary); letter-spacing: 0.01em; }
-  h2 .hint { color: var(--text-muted); font-weight: 400; }
-
-  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 12px; }
-  @media (max-width: 900px) { .kpis { grid-template-columns: repeat(2, 1fr); } }
-  .kpi { background: var(--surface-1); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; }
-  .kpi .k-label { color: var(--text-secondary); font-size: 12px; }
-  .kpi .k-value { font-size: 27px; font-weight: 650; margin-top: 4px; letter-spacing: -0.02em; }
-  .kpi .k-note { color: var(--text-muted); font-size: 11.5px; margin-top: 3px; }
-  .kpi .k-value.neg { color: var(--neg); }
-  .kpi .k-value.pos-delta { color: var(--good-text); }
-
-  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
-  @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
-
-  .detail-rows { display: grid; gap: 7px; font-size: 13px; }
-  .detail-rows .row { display: flex; justify-content: space-between; gap: 12px; }
-  .detail-rows .row span:first-child { color: var(--text-secondary); }
-  .detail-rows .row .num { font-variant-numeric: tabular-nums; }
-  .detail-rows .row.total { border-top: 1px solid var(--grid); padding-top: 7px; font-weight: 600; }
-  .detail-rows .row.total span:first-child { color: var(--text-primary); }
-
-  .moves { display: grid; gap: 8px; }
-  .move { display: grid; grid-template-columns: minmax(0,1fr) 96px; align-items: center; gap: 10px; font-size: 12.5px; }
-  .move .m-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-secondary); }
-  .move .m-amt { text-align: right; font-variant-numeric: tabular-nums; }
-  .move .m-amt.freed { color: var(--good-text); }
-  .move .m-amt.used { color: var(--neg); }
-  .move .m-bar { grid-column: 1 / -1; height: 4px; border-radius: 2px; background: var(--grid); position: relative; overflow: hidden; }
-  .move .m-bar i { position: absolute; top: 0; bottom: 0; border-radius: 2px; }
-
-  .chart-box { position: relative; height: 250px; }
-  .mb { margin-bottom: 12px; }
-
-  table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--grid); font-size: 13px; }
-  th { color: var(--text-muted); font-weight: 500; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.04em; }
-  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
-  td .detail { color: var(--text-muted); font-size: 11px; display: block; }
-  .neg-amt { color: var(--neg); }
-  .empty { color: var(--text-muted); padding: 18px 0; text-align: center; font-size: 13px; }
-  .warnings { color: var(--text-secondary); font-size: 12px; margin-top: 12px; display: grid; gap: 4px; }
-  #loading { color: var(--text-muted); font-size: 12px; display: none; }
-  #loading.show { display: inline; }
-  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-  .seg button { border: none; border-radius: 0; padding: 6px 10px; background: var(--surface-1); font-size: 12.5px; }
-  .seg button + button { border-left: 1px solid var(--border); }
-  .seg button.active { background: var(--series-1); color: #fff; }
-  a.connect { color: var(--series-1); }
-</style>
+<title>Pictureline · Cash Reports</title>
+<link rel="stylesheet" href="/theme.css">
 </head>
 <body>
-<div class="wrap">
-  <header>
-    <div>
-      <h1>Pictureline — cash dashboard</h1>
-      <div class="sub" id="envLine">connecting…</div>
-    </div>
-    <div class="controls">
-      <span id="loading">loading…</span>
-      <select id="preset">
-        <option value="this">This month</option>
-        <option value="last">Last month</option>
-        <option value="l3">Last 3 months</option>
-        <option value="ytd" selected>Year to date</option>
-        <option value="t12">Trailing 12 months</option>
-        <option value="custom">Custom range</option>
-      </select>
-      <input type="month" id="fromPicker"><span class="range-sep">→</span><input type="month" id="toPicker">
-      <button id="refreshBtn" title="Recompute from QuickBooks, bypassing caches">Refresh</button>
-      <a class="quiet" href="/auth/logout">Sign out</a>
-    </div>
-  </header>
+<div class="topbar"><div class="topbar-inner">
+  <a class="brand" href="/">Pictureline <span>Cash Reports</span></a>
+  <div class="spacer"></div>
+  <a class="crumb" id="envLine" href="/api/status">…</a>
+  <a class="crumb" href="/auth/logout">Sign out</a>
+</div></div>
 
+<div class="wrap">
+  <h1 class="title">Reports</h1>
+  <p class="subtitle">Cash-verified financials · <span id="rangeLabel"></span></p>
+  <div id="rangeBox"></div>
   <div class="banner" id="banner"></div>
 
-  <div class="kpis">
-    <div class="kpi">
-      <div class="k-label">Revenue — cash, net of sales tax</div>
-      <div class="k-value" id="kIncome">—</div>
-      <div class="k-note" id="kIncomeNote">All income accounts, money movements only</div>
-    </div>
-    <div class="kpi">
-      <div class="k-label">Cash COGS</div>
-      <div class="k-value" id="kCogs">—</div>
-      <div class="k-note">Inventory cash out, both locations</div>
-    </div>
-    <div class="kpi">
-      <div class="k-label">Gross profit</div>
-      <div class="k-value" id="kGp">—</div>
-      <div class="k-note" id="kGpNote">Income − cash COGS</div>
-    </div>
-    <div class="kpi">
-      <div class="k-label">Bank accounts change</div>
-      <div class="k-value" id="kBank">—</div>
-      <div class="k-note" id="kBankNote">Balance-sheet movement over the range</div>
-    </div>
+  <div class="kpis" style="margin-top:22px">
+    <div class="kpi"><div class="k-label">Net revenue</div><div class="k-value" id="kRev">—</div><div class="k-note">Cash received, net of sales tax</div></div>
+    <div class="kpi"><div class="k-label">Total COGS</div><div class="k-value" id="kCogs">—</div><div class="k-note">Inventory + freight − rebates</div></div>
+    <div class="kpi"><div class="k-label">Gross profit</div><div class="k-value" id="kGp">—</div><div class="k-note" id="kGpNote">—</div></div>
+    <div class="kpi"><div class="k-label">NOI</div><div class="k-value" id="kNoi">—</div><div class="k-note">After expenses from the books</div></div>
   </div>
 
-  <div class="grid2">
-    <div class="card">
-      <h2>Cash P&amp;L detail <span class="hint" id="pnlRange"></span></h2>
-      <div class="detail-rows" id="pnlDetail"><div class="empty">Loading…</div></div>
-    </div>
-    <div class="card">
-      <h2>Bank reconciliation <span class="hint">— money in − money out, measured directly</span></h2>
-      <div class="detail-rows" id="bankRecon"><div class="empty">Computing… (first run over a new range takes a few minutes)</div></div>
-    </div>
+  <div class="tiles" style="margin-top:22px">
+    <a class="tile" id="lnkPnl" href="/pnl">
+      <div class="icon blue">▤</div>
+      <div><div class="t-name">Profit &amp; Loss</div><div class="t-desc">Full cash P&amp;L statement — income, COGS, expenses, NOI</div></div>
+    </a>
+    <a class="tile" id="lnkBank" href="/bank">
+      <div class="icon green">⇅</div>
+      <div><div class="t-name">Bank Reconciliation</div><div class="t-desc">Money in vs money out, tied to actual bank change</div></div>
+    </a>
+    <a class="tile" id="lnkCash" href="/cashflow">
+      <div class="icon purple">◔</div>
+      <div><div class="t-name">Where the Cash Went</div><div class="t-desc">Balance-sheet movements — inventory, cards, taxes, owners</div></div>
+    </a>
+    <a class="tile" id="lnkInv" href="/inventory">
+      <div class="icon orange">▥</div>
+      <div><div class="t-name">Inventory &amp; COGS</div><div class="t-desc">Monthly trend and transaction-level audit, by location</div></div>
+    </a>
   </div>
-
-  <div class="card mb">
-    <h2>Balance-sheet account movements <span class="hint">— reference view of the same range</span></h2>
-    <div class="moves" id="cashMoves"><div class="empty">Loading…</div></div>
-  </div>
-
-  <div class="card mb">
-    <h2>Monthly — income vs cash COGS</h2>
-    <div class="chart-box"><canvas id="trendChart"></canvas></div>
-  </div>
-
-  <div class="card">
-    <h2>Inventory transactions <span class="hint" id="txHint"></span>
-      <span class="seg" id="acctToggle" style="float:right;margin-top:-4px"></span>
-    </h2>
-    <div style="overflow-x:auto">
-      <table id="txTable" style="display:none">
-        <thead>
-          <tr><th>Date</th><th>Vendor</th><th>Source</th><th>Method</th><th class="num">Inventory amount</th></tr>
-        </thead>
-        <tbody id="txRows"></tbody>
-      </table>
-    </div>
-    <div class="empty" id="txEmpty">Select a single-month range to see the line-by-line audit table.</div>
-  </div>
-
-  <div class="warnings" id="warnings"></div>
 </div>
 
+<script src="/app.js"></script>
 <script>
-const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
-const usd2 = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
-const $ = (id) => document.getElementById(id);
-let chart = null;
-let accountsFilter = 'all';
-
-const state = { from: '', to: '' };
-
-function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
-function ym(d) { return d.toISOString().slice(0, 7); }
-function nowUtc() { return new Date(); }
-
-function applyPreset(p) {
-  const now = nowUtc();
-  const cur = ym(now);
-  const shift = (n) => ym(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + n, 1)));
-  if (p === 'this') { state.from = cur; state.to = cur; }
-  else if (p === 'last') { state.from = shift(-1); state.to = shift(-1); }
-  else if (p === 'l3') { state.from = shift(-2); state.to = cur; }
-  else if (p === 'ytd') { state.from = cur.slice(0, 4) + '-01'; state.to = cur; }
-  else if (p === 't12') { state.from = shift(-11); state.to = cur; }
-  $('fromPicker').value = state.from;
-  $('toPicker').value = state.to;
-}
-
-function escapeHtml(s) {
-  return String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-function showBanner(html) { const b = $('banner'); b.innerHTML = html; b.classList.add('show'); }
-
-async function jfetch(url) {
-  const res = await fetch(url);
-  if (res.status === 401) { location.href = '/login'; throw new Error('signed out'); }
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || res.statusText);
-  return data;
-}
-
-async function loadStatus() {
-  const s = await jfetch('/api/status');
-  if (s.missingConfig) { showBanner('<strong>Not configured.</strong> Missing: ' + s.missingConfig.join(', ')); return false; }
-  if (!s.connected) { showBanner('<strong>Not connected.</strong> <a class="connect" href="/connect">Connect QuickBooks</a>.'); return false; }
-  $('envLine').textContent =
-    (s.environment === 'production' ? 'QuickBooks production' : 'QuickBooks sandbox') +
-    ((s.inventoryAccounts || []).length
-      ? ' · inventory: ' + s.inventoryAccounts.map((a) => '#' + (a.acctNum || a.name)).join(' + ')
-      : '');
-  if (s.staleWarning) showBanner('<strong>Connection warning.</strong> ' + escapeHtml(s.staleWarning) + ' <a class="connect" href="/connect">Reconnect</a>');
-  buildAcctToggle(s.inventoryAccounts || []);
-  return true;
-}
-
-function renderSummary(s) {
-  $('kIncome').textContent = usd.format(s.totals.revenueNet);
-  $('kIncomeNote').textContent = 'Net of $' + Math.round(s.totals.salesTaxRemitted).toLocaleString('en-US') + ' sales tax remitted';
-  $('kCogs').textContent = usd.format(s.totals.cogs);
-  $('kGp').textContent = usd.format(s.totals.grossProfit);
-  $('kGp').classList.toggle('neg', s.totals.grossProfit < 0);
-  $('kGpNote').textContent = s.totals.grossMarginPct !== null ? s.totals.grossMarginPct.toFixed(1) + '% margin' : 'Income − cash COGS';
-  $('pnlRange').textContent = '— ' + s.start + (s.start === s.end ? '' : ' → ' + s.end);
-
-  const d = $('pnlDetail');
-  d.innerHTML = '';
-  const rows = [
-    ['Deposits to income accounts', s.totals.incomeDeposits],
-    ['Invoice payments received', s.totals.incomeInvoicePayments],
-    ['Sales receipts', s.totals.incomeReceipts],
-    ['Refund receipts', -s.totals.incomeRefunds],
-    ['Money in (tax-inclusive, per POS sync)', s.totals.income, 'total'],
-    ['Less: sales tax remitted', -s.totals.salesTaxRemitted],
-    ['Revenue — net of sales tax', s.totals.revenueNet, 'total'],
-    ['Cash COGS', -s.totals.cogs],
-    ['Freight, repairs & materials (direct costs)', -s.totals.directCosts],
-    ['Vendor rebates/refunds received (COGS offset)', s.totals.cogsOffsets],
-    ['Gross profit', s.totals.grossProfit, 'total'],
-    ['Expense reimbursements received (reduces opex)', s.totals.expenseOffsets],
-    ['Bank inflows (reference, incl. tax)', s.totals.bankInflows],
-    ['Booked inventory (accrual, reference)', s.totals.bookedCogs],
-    ['Vendor credits applied (already netted)', s.totals.vendorCreditsApplied],
-  ];
-  for (const [label, value, cls] of rows) {
-    const div = document.createElement('div');
-    div.className = 'row' + (cls ? ' ' + cls : '');
-    div.innerHTML = '<span>' + label + '</span><span class="num' + (value < 0 ? ' neg-amt' : '') + '">' + usd2.format(value) + '</span>';
-    d.appendChild(div);
-  }
-
-  const w = $('warnings');
-  w.innerHTML = '';
-  const seen = new Set();
-  for (const warn of s.warnings || []) {
-    if (seen.has(warn)) continue;
-    seen.add(warn);
-    const div = document.createElement('div');
-    div.textContent = '⚠ ' + warn;
-    w.appendChild(div);
-  }
-
-  renderChart(s.months);
-}
-
-function renderCashFlow(cf) {
-  const el = $('kBank');
-  el.textContent = (cf.bankChange >= 0 ? '+' : '') + usd.format(cf.bankChange);
-  el.classList.toggle('neg', cf.bankChange < 0);
-  el.classList.toggle('pos-delta', cf.bankChange > 0);
-  $('kBankNote').textContent = cf.bankAccounts.map((b) => b.name.replace(/\s*\(.*\)/, '')).join(', ') || 'No bank movement';
-
-  const box = $('cashMoves');
-  box.innerHTML = '';
-  const top = cf.moves.slice(0, 10);
-  if (!top.length) { box.innerHTML = '<div class="empty">No balance-sheet movement in this range.</div>'; return; }
-  const maxAbs = Math.max(...top.map((m) => Math.abs(m.cashEffect)));
-  for (const m of top) {
-    const freed = m.cashEffect >= 0;
-    const div = document.createElement('div');
-    div.className = 'move';
-    const pct = Math.max(3, Math.round((Math.abs(m.cashEffect) / maxAbs) * 100));
-    const heldTax = /sales tax|w\/h tax|withholding/i.test(m.name);
-    div.innerHTML =
-      '<span class="m-name" title="' + escapeHtml(m.name) + ' (' + escapeHtml(m.type) + ')">' +
-        (m.acctNum ? '#' + m.acctNum + ' ' : '') + escapeHtml(m.name) +
-        (heldTax ? ' <span style="color:var(--text-muted)">· held tax passed through, not an expense</span>' : '') + '</span>' +
-      '<span class="m-amt ' + (freed ? 'freed' : 'used') + '">' + (freed ? '+' : '−') + usd.format(Math.abs(m.cashEffect)) + '</span>' +
-      '<span class="m-bar"><i style="width:' + pct + '%;' + (freed ? 'left:0;background:var(--pos)' : 'right:0;background:var(--neg)') + '"></i></span>';
-    box.appendChild(div);
-  }
-  const foot = document.createElement('div');
-  foot.className = 'move';
-  foot.innerHTML = '<span class="m-name" style="color:var(--text-muted)">Positive = freed cash into the bank · negative = absorbed cash</span><span></span>';
-  box.appendChild(foot);
-}
-
-function renderBankFlow(bf) {
-  const d = $('bankRecon');
-  d.innerHTML = '';
-  const rows = [
-    ['Deposits into bank', bf.inflows.deposits],
-    ['Receipts/payments straight to bank', bf.inflows.directSalesReceipts + bf.inflows.directInvoicePayments],
-    ['Transfers in', bf.inflows.transfersIn],
-    ['Money in', bf.inflows.total, 'total'],
-    ['Bill payments (checks/ACH)', -bf.outflows.billPayments],
-    ['· of which inventory', -bf.outflows.billPaymentsInventoryPortion, 'sub'],
-    ['Direct purchases from bank', -bf.outflows.purchases],
-    ['· of which inventory', -bf.outflows.purchasesInventoryPortion, 'sub'],
-    ['Customer refunds', -bf.outflows.refundsToCustomers],
-    ['Card pay-downs & transfers out', -(bf.outflows.transfersToCards + bf.outflows.transfersOutOther)],
-    ['Money out', -bf.outflows.total, 'total'],
-    ['Net (categorized)', bf.netCategorized, 'total'],
-  ];
-  if (bf.actualBankChange !== null) {
-    rows.push(['Actual bank change (balance sheet)', bf.actualBankChange, 'total']);
-    rows.push(['Not visible to the API (payroll, tax-center payments)', bf.uncategorized]);
-  }
-  for (const [label, value, cls] of rows) {
-    const div = document.createElement('div');
-    div.className = 'row' + (cls === 'total' ? ' total' : '');
-    const labelHtml = cls === 'sub' ? '<span style="color:var(--text-muted);padding-left:14px">' + label + '</span>' : '<span>' + label + '</span>';
-    div.innerHTML = labelHtml + '<span class="num' + (value < 0 ? ' neg-amt' : '') + '">' + usd2.format(value) + '</span>';
-    d.appendChild(div);
-  }
-  if (bf.outflows.topVendors?.length) {
-    const v = document.createElement('div');
-    v.className = 'row';
-    v.innerHTML = '<span style="color:var(--text-muted);font-size:11.5px">Top payees: ' +
-      bf.outflows.topVendors.slice(0, 5).map((t) => escapeHtml(t.vendor) + ' ' + usd.format(t.amount)).join(' · ') + '</span><span></span>';
-    d.appendChild(v);
-  }
-}
-
-async function loadBankFlow(forceRefresh) {
-  const q = '?start=' + state.from + '&end=' + state.to + (forceRefresh ? '&refresh=1' : '');
+async function load() {
+  setLoading(true);
   try {
-    renderBankFlow(await jfetch('/api/bank-flow' + q));
-  } catch (err) {
-    if (err.message !== 'signed out') $('bankRecon').innerHTML = '<div class="empty">Bank reconciliation error: ' + escapeHtml(err.message) + '</div>';
-  }
-}
-
-function renderChart(months) {
-  const labels = months.map((m) => {
-    const [y, mo] = m.month.split('-');
-    return new Date(Date.UTC(+y, +mo - 1, 1)).toLocaleString('en-US', { month: 'short', timeZone: 'UTC' }) +
-      (mo === '01' ? ' ’' + y.slice(2) : '');
-  });
-  if (chart) chart.destroy();
-  chart = new Chart($('trendChart'), {
-    type: 'bar',
-    data: {
-      labels,
-      datasets: [
-        {
-          label: 'Income (cash)',
-          data: months.map((m) => m.income),
-          backgroundColor: css('--series-1'),
-          maxBarThickness: 20,
-          borderRadius: { topLeft: 4, topRight: 4 },
-          borderSkipped: 'bottom',
-        },
-        {
-          label: 'Cash COGS',
-          data: months.map((m) => m.cogs),
-          backgroundColor: css('--baseline'),
-          maxBarThickness: 20,
-          borderRadius: { topLeft: 4, topRight: 4 },
-          borderSkipped: 'bottom',
-        },
-      ],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { position: 'top', align: 'end', labels: { color: css('--text-secondary'), boxWidth: 10, boxHeight: 10, usePointStyle: true } },
-        tooltip: {
-          callbacks: {
-            afterBody: (items) => {
-              const m = months[items[0].dataIndex];
-              return ['Gross profit: ' + usd2.format(m.grossProfit) + (m.margin !== null ? ' (' + m.margin.toFixed(1) + '%)' : '')];
-            },
-          },
-        },
-      },
-      scales: {
-        x: { grid: { display: false }, border: { color: css('--baseline') }, ticks: { color: css('--text-muted') } },
-        y: {
-          beginAtZero: true,
-          grid: { color: css('--grid'), lineWidth: 1 },
-          border: { display: false },
-          ticks: { color: css('--text-muted'), callback: (v) => '$' + (v / 1000).toLocaleString('en-US') + 'k' },
-        },
-      },
-      onClick: (_e, els) => {
-        if (els.length) {
-          const m = months[els[0].index].month;
-          $('preset').value = 'custom';
-          state.from = m; state.to = m;
-          $('fromPicker').value = m; $('toPicker').value = m;
-          loadAll(false);
-        }
-      },
-    },
-  });
-}
-
-function buildAcctToggle(accounts) {
-  const box = $('acctToggle');
-  box.innerHTML = '';
-  if (!accounts || accounts.length < 2) return;
-  const options = [{ key: 'all', label: 'Both' }].concat(
-    accounts.map((a) => ({ key: a.acctNum || a.name, label: '#' + (a.acctNum || a.name) }))
-  );
-  for (const opt of options) {
-    const b = document.createElement('button');
-    b.textContent = opt.label;
-    if (opt.key === accountsFilter) b.classList.add('active');
-    b.addEventListener('click', () => {
-      accountsFilter = opt.key;
-      for (const o of box.children) o.classList.remove('active');
-      b.classList.add('active');
-      loadTransactions(false);
-    });
-    box.appendChild(b);
-  }
-}
-
-async function loadTransactions(forceRefresh) {
-  const single = state.from === state.to;
-  $('txTable').style.display = single ? '' : 'none';
-  $('txEmpty').style.display = single ? 'none' : '';
-  $('txHint').textContent = single ? '— ' + state.from + (accountsFilter === 'all' ? '' : ' · #' + accountsFilter) : '';
-  if (!single) return;
-  try {
-    const q = accountsFilter === 'all' ? '' : '&accounts=' + encodeURIComponent(accountsFilter);
-    const d = await jfetch('/api/inventory-spend?month=' + state.from + (forceRefresh ? '&refresh=1' : '') + q);
-    const rows = $('txRows');
-    rows.innerHTML = '';
-    for (const t of d.transactions) {
-      const tr = document.createElement('tr');
-      tr.innerHTML =
-        '<td>' + t.date + '</td>' +
-        '<td>' + escapeHtml(t.vendor) + (t.detail ? '<span class="detail">' + escapeHtml(t.detail) + '</span>' : '') + '</td>' +
-        '<td>' + (t.sourceType === 'BillPayment' ? 'Bill payment' : 'Direct purchase') + '</td>' +
-        '<td>' + escapeHtml(t.paymentMethod) + '</td>' +
-        '<td class="num' + (t.amount < 0 ? ' neg-amt' : '') + '">' + usd2.format(t.amount) + '</td>';
-      rows.appendChild(tr);
-    }
-    if (!d.transactions.length) { $('txTable').style.display = 'none'; $('txEmpty').style.display = ''; $('txEmpty').textContent = 'No inventory transactions this month.'; }
-  } catch (err) {
-    showBanner('<strong>Transactions error.</strong> ' + escapeHtml(err.message));
-  }
-}
-
-async function loadAll(forceRefresh) {
-  $('loading').classList.add('show');
-  const q = '?start=' + state.from + '&end=' + state.to + (forceRefresh ? '&refresh=1' : '');
-  try {
-    const [summary, cashflow] = await Promise.all([
-      jfetch('/api/summary' + q),
-      jfetch('/api/cash-flow' + q),
-    ]);
-    renderSummary(summary);
-    renderCashFlow(cashflow);
-    loadTransactions(forceRefresh);
-    $('bankRecon').innerHTML = '<div class="empty">Computing… (first run over a new range takes a few minutes)</div>';
-    loadBankFlow(forceRefresh);
+    const d = await jfetch('/api/pnl-statement?' + Range.qs());
+    $('kRev').textContent = usd.format(d.income.netRevenue);
+    $('kCogs').textContent = usd.format(d.cogs.total);
+    $('kGp').textContent = usd.format(d.grossProfit);
+    $('kGp').classList.toggle('neg', d.grossProfit < 0);
+    $('kGpNote').textContent = d.grossMarginPct !== null ? d.grossMarginPct.toFixed(1) + '% margin' : '—';
+    $('kNoi').textContent = usd.format(d.noi);
+    $('kNoi').classList.toggle('neg', d.noi < 0);
   } catch (err) {
     if (err.message !== 'signed out') showBanner('<strong>Error.</strong> ' + escapeHtml(err.message));
   } finally {
-    $('loading').classList.remove('show');
+    setLoading(false);
+  }
+  for (const [id, path] of [['lnkPnl','/pnl'],['lnkBank','/bank'],['lnkCash','/cashflow'],['lnkInv','/inventory']]) {
+    $(id).href = linkWithRange(path);
   }
 }
-
 async function init() {
-  applyPreset('ytd');
-  $('preset').addEventListener('change', () => {
-    if ($('preset').value !== 'custom') { applyPreset($('preset').value); loadAll(false); }
-  });
-  for (const id of ['fromPicker', 'toPicker']) {
-    $(id).addEventListener('change', () => {
-      $('preset').value = 'custom';
-      state.from = $('fromPicker').value;
-      state.to = $('toPicker').value;
-      if (state.from && state.to && state.from <= state.to) loadAll(false);
-    });
+  mountRange(() => load());
+  const s = await checkStatus();
+  if (s) {
+    $('envLine').textContent = s.environment === 'production' ? 'QuickBooks · production' : 'QuickBooks · sandbox';
+    load();
   }
-  $('refreshBtn').addEventListener('click', () => loadAll(true));
-  const ok = await loadStatus();
-  if (!ok) return;
-  loadAll(false);
 }
 init();
 </script>

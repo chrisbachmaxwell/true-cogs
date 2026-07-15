@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inventory &amp; COGS · Pictureline</title>
+<link rel="stylesheet" href="/theme.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+</head>
+<body>
+<div class="topbar"><div class="topbar-inner">
+  <a class="brand" href="/">Pictureline <span>Cash Reports</span></a>
+  <a class="crumb" id="backLink" href="/">← All reports</a>
+  <div class="spacer"></div>
+  <a class="crumb" href="/auth/logout">Sign out</a>
+</div></div>
+
+<div class="wrap">
+  <h1 class="title">Inventory &amp; COGS</h1>
+  <p class="subtitle">Cash out for inventory, by month and by transaction · <span id="rangeLabel"></span></p>
+  <div id="rangeBox"></div>
+  <div class="banner" id="banner"></div>
+
+  <div class="card" style="margin-top:22px">
+    <h2>Monthly — income vs cash COGS <span class="hint">— click a month to open its transactions</span></h2>
+    <div class="chart-box"><canvas id="trendChart"></canvas></div>
+  </div>
+
+  <div class="card">
+    <h2>Transactions <span class="hint" id="txHint"></span>
+      <span class="seg" id="acctToggle" style="float:right;margin-top:-4px"></span>
+    </h2>
+    <div style="overflow-x:auto">
+      <table id="txTable" style="display:none">
+        <thead><tr><th>Date</th><th>Vendor</th><th>Source</th><th>Method</th><th class="num">Inventory amount</th></tr></thead>
+        <tbody id="txRows"></tbody>
+      </table>
+    </div>
+    <div class="empty" id="txEmpty">Pick a month on the chart (or set the range within one month) to see the line-by-line audit.</div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+<script>
+let chart = null;
+let accountsFilter = 'all';
+let selectedMonth = null;
+
+function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+function monthsInRange() {
+  const r = Range.get();
+  const list = [];
+  let [y, m] = r.start.slice(0, 7).split('-').map(Number);
+  const [ey, em] = r.end.slice(0, 7).split('-').map(Number);
+  while (y < ey || (y === ey && m <= em)) {
+    list.push(y + '-' + String(m).padStart(2, '0'));
+    m++; if (m > 12) { m = 1; y++; }
+  }
+  return list.slice(-24);
+}
+
+function buildAcctToggle(accounts) {
+  const box = $('acctToggle');
+  box.innerHTML = '';
+  if (!accounts || accounts.length < 2) return;
+  const options = [{ key: 'all', label: 'Both' }].concat(
+    accounts.map((a) => ({ key: a.acctNum || a.name, label: '#' + (a.acctNum || a.name) }))
+  );
+  for (const opt of options) {
+    const b = document.createElement('button');
+    b.textContent = opt.label;
+    if (opt.key === accountsFilter) b.classList.add('active');
+    b.addEventListener('click', () => {
+      accountsFilter = opt.key;
+      for (const o of box.children) o.classList.remove('active');
+      b.classList.add('active');
+      loadTransactions();
+    });
+    box.appendChild(b);
+  }
+}
+
+async function loadTransactions() {
+  const single = selectedMonth || (Range.get().start.slice(0, 7) === Range.get().end.slice(0, 7) ? Range.get().start.slice(0, 7) : null);
+  $('txTable').style.display = single ? '' : 'none';
+  $('txEmpty').style.display = single ? 'none' : '';
+  $('txHint').textContent = single ? '— ' + single + (accountsFilter === 'all' ? '' : ' · #' + accountsFilter) : '';
+  if (!single) return;
+  try {
+    const q = accountsFilter === 'all' ? '' : '&accounts=' + encodeURIComponent(accountsFilter);
+    const d = await jfetch('/api/inventory-spend?month=' + single + q);
+    const rows = $('txRows');
+    rows.innerHTML = '';
+    for (const t of d.transactions) {
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td>' + t.date + '</td>' +
+        '<td>' + escapeHtml(t.vendor) + (t.detail ? '<span class="detail">' + escapeHtml(t.detail) + '</span>' : '') + '</td>' +
+        '<td>' + (t.sourceType === 'BillPayment' ? 'Bill payment' : 'Direct purchase') + '</td>' +
+        '<td>' + escapeHtml(t.paymentMethod) + '</td>' +
+        '<td class="num' + (t.amount < 0 ? ' neg' : '') + '">' + usd2.format(t.amount) + '</td>';
+      rows.appendChild(tr);
+    }
+    if (!d.transactions.length) { $('txTable').style.display = 'none'; $('txEmpty').style.display = ''; $('txEmpty').textContent = 'No inventory transactions in ' + single + '.'; }
+  } catch (err) {
+    if (err.message !== 'signed out') showBanner('<strong>Transactions error.</strong> ' + escapeHtml(err.message));
+  }
+}
+
+async function load() {
+  setLoading(true);
+  try {
+    const months = monthsInRange();
+    const d = await jfetch('/api/summary?start=' + months[0] + '&end=' + months[months.length - 1]);
+    renderChart(d.months);
+  } catch (err) {
+    if (err.message !== 'signed out') showBanner('<strong>Error.</strong> ' + escapeHtml(err.message));
+  } finally {
+    setLoading(false);
+  }
+  loadTransactions();
+  $('backLink').href = linkWithRange('/');
+}
+
+function renderChart(months) {
+  const labels = months.map((m) => {
+    const [y, mo] = m.month.split('-');
+    return new Date(Date.UTC(+y, +mo - 1, 1)).toLocaleString('en-US', { month: 'short', timeZone: 'UTC' }) + (mo === '01' ? ' ’' + y.slice(2) : '');
+  });
+  if (chart) chart.destroy();
+  chart = new Chart($('trendChart'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Income (cash)', data: months.map((m) => m.income), backgroundColor: css('--series-1'), maxBarThickness: 20, borderRadius: { topLeft: 4, topRight: 4 }, borderSkipped: 'bottom' },
+        { label: 'Cash COGS', data: months.map((m) => m.cogs), backgroundColor: css('--series-2'), maxBarThickness: 20, borderRadius: { topLeft: 4, topRight: 4 }, borderSkipped: 'bottom' },
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { position: 'top', align: 'end', labels: { color: css('--ink-2'), boxWidth: 10, boxHeight: 10, usePointStyle: true } },
+        tooltip: { callbacks: { afterBody: (items) => {
+          const m = months[items[0].dataIndex];
+          return ['Gross profit: ' + usd2.format(m.grossProfit) + (m.margin !== null ? ' (' + m.margin.toFixed(1) + '%)' : '')];
+        } } },
+      },
+      scales: {
+        x: { grid: { display: false }, border: { color: css('--hairline') }, ticks: { color: css('--ink-3') } },
+        y: { beginAtZero: true, grid: { color: css('--grid'), lineWidth: 1 }, border: { display: false },
+             ticks: { color: css('--ink-3'), callback: (v) => '$' + (v / 1000).toLocaleString('en-US') + 'k' } },
+      },
+      onClick: (_e, els) => {
+        if (els.length) { selectedMonth = months[els[0].index].month; loadTransactions(); }
+      },
+    },
+  });
+}
+
+async function init() {
+  mountRange(() => { selectedMonth = null; load(); });
+  const s = await checkStatus();
+  if (s) { buildAcctToggle(s.inventoryAccounts || []); load(); }
+}
+init();
+</script>
+</body>
+</html>

@@ -107,12 +107,14 @@ export interface PnlContext {
 export async function computeMonthlyPnl(
   api: QboApi,
   ctx: PnlContext,
-  month: string,
+  monthOrRange: string | { start: string; end: string },
   cogs: number,
   salesTaxRemitted = 0,
   directCosts = 0
 ): Promise<MonthlyPnl> {
-  const { start, end } = monthDateRange(month);
+  const { start, end } =
+    typeof monthOrRange === 'string' ? monthDateRange(monthOrRange) : monthOrRange;
+  const month = typeof monthOrRange === 'string' ? monthOrRange : `${start}..${end}`;
   const bankIds = new Set(ctx.bankAccountIds);
   const retailIds = new Set(ctx.retailIncomeAccountIds);
   const warnings: string[] = [];

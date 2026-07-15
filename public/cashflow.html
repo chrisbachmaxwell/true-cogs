@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Where the Cash Went · Pictureline</title>
+<link rel="stylesheet" href="/theme.css">
+</head>
+<body>
+<div class="topbar"><div class="topbar-inner">
+  <a class="brand" href="/">Pictureline <span>Cash Reports</span></a>
+  <a class="crumb" id="backLink" href="/">← All reports</a>
+  <div class="spacer"></div>
+  <a class="crumb" href="/auth/logout">Sign out</a>
+</div></div>
+
+<div class="wrap">
+  <h1 class="title">Where the Cash Went</h1>
+  <p class="subtitle">Balance-sheet movements over the range · <span id="rangeLabel"></span></p>
+  <div id="rangeBox"></div>
+  <div class="banner" id="banner"></div>
+
+  <div class="kpis" style="margin-top:22px; grid-template-columns: repeat(2, 1fr);">
+    <div class="kpi"><div class="k-label">Bank accounts change</div><div class="k-value" id="kBank">—</div><div class="k-note" id="kBankNote">—</div></div>
+    <div class="kpi"><div class="k-label">Non-bank accounts net effect</div><div class="k-value" id="kEffect">—</div><div class="k-note">Positive = freed cash · negative = absorbed cash</div></div>
+  </div>
+
+  <div class="card">
+    <h2>Account movements <span class="hint">— largest cash effect first</span></h2>
+    <div class="moves" id="moves"><div class="empty">Loading…</div></div>
+    <div class="warnings" id="warnings"></div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+<script>
+async function load(force) {
+  setLoading(true);
+  try {
+    const d = await jfetch('/api/cash-flow?' + Range.qs() + (force ? '&refresh=1' : ''));
+    const el = $('kBank');
+    el.textContent = (d.bankChange >= 0 ? '+' : '') + usd.format(d.bankChange);
+    el.classList.toggle('neg', d.bankChange < 0);
+    el.classList.toggle('pos', d.bankChange > 0);
+    $('kBankNote').textContent = 'As of ' + d.asOfStart + ' → ' + d.asOfEnd;
+    $('kEffect').textContent = (d.totalCashEffect >= 0 ? '+' : '') + usd.format(d.totalCashEffect);
+    const box = $('moves');
+    box.innerHTML = '';
+    const top = d.moves.slice(0, 14);
+    if (!top.length) { box.innerHTML = '<div class="empty">No movement in this range.</div>'; return; }
+    const maxAbs = Math.max(...top.map((m) => Math.abs(m.cashEffect)));
+    for (const m of top) {
+      const freed = m.cashEffect >= 0;
+      const heldTax = /sales tax|w\/h tax|withholding/i.test(m.name);
+      const div = document.createElement('div');
+      div.className = 'move';
+      const pct = Math.max(3, Math.round((Math.abs(m.cashEffect) / maxAbs) * 100));
+      div.innerHTML =
+        '<span class="m-name" title="' + escapeHtml(m.name) + ' (' + escapeHtml(m.type) + ')">' +
+          (m.acctNum ? '#' + m.acctNum + ' ' : '') + escapeHtml(m.name) +
+          (heldTax ? ' <span style="color:var(--ink-3)">· held tax passed through</span>' : '') + '</span>' +
+        '<span class="m-amt ' + (freed ? 'pos' : 'neg') + '">' + (freed ? '+' : '−') + usd.format(Math.abs(m.cashEffect)) + '</span>' +
+        '<span class="m-bar"><i style="width:' + pct + '%;' + (freed ? 'left:0;background:var(--accent)' : 'right:0;background:var(--bad)') + '"></i></span>';
+      box.appendChild(div);
+    }
+    const w = $('warnings');
+    w.innerHTML = '';
+    for (const warn of d.warnings || []) {
+      const div = document.createElement('div');
+      div.textContent = '⚠ ' + warn;
+      w.appendChild(div);
+    }
+  } catch (err) {
+    if (err.message !== 'signed out') showBanner('<strong>Error.</strong> ' + escapeHtml(err.message));
+  } finally {
+    setLoading(false);
+  }
+  $('backLink').href = linkWithRange('/');
+}
+async function init() {
+  mountRange((force) => load(force));
+  if (await checkStatus()) load(false);
+}
+init();
+</script>
+</body>
+</html>

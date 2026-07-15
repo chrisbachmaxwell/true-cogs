@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Profit &amp; Loss · Pictureline</title>
+<link rel="stylesheet" href="/theme.css">
+</head>
+<body>
+<div class="topbar"><div class="topbar-inner">
+  <a class="brand" href="/">Pictureline <span>Cash Reports</span></a>
+  <a class="crumb" id="backLink" href="/">← All reports</a>
+  <div class="spacer"></div>
+  <a class="crumb" href="/auth/logout">Sign out</a>
+</div></div>
+
+<div class="wrap">
+  <h1 class="title">Profit &amp; Loss</h1>
+  <p class="subtitle">Cash-verified · <span id="rangeLabel"></span></p>
+  <div id="rangeBox"></div>
+  <div class="banner" id="banner"></div>
+
+  <div class="card" style="margin-top:22px">
+    <div class="stmt" id="stmt"><div class="empty">Loading…</div></div>
+    <div class="warnings" id="warnings"></div>
+  </div>
+
+  <div class="card">
+    <h2>Operating expenses <span class="hint">— from the books (accrual), largest first</span></h2>
+    <div style="overflow-x:auto"><table>
+      <thead><tr><th>Expense</th><th class="num">Amount</th></tr></thead>
+      <tbody id="expRows"></tbody>
+    </table></div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+<script>
+function row(label, value, cls) {
+  const negClass = value < 0 ? ' neg' : '';
+  return '<div class="srow' + (cls ? ' ' + cls : '') + '"><span>' + label + '</span><span class="num' + negClass + '">' + usd2.format(value) + '</span></div>';
+}
+async function load(force) {
+  setLoading(true);
+  try {
+    const d = await jfetch('/api/pnl-statement?' + Range.qs() + (force ? '&refresh=1' : ''));
+    let h = '';
+    h += '<div class="section">Income</div>';
+    h += row('Money in — bank-verified customer cash', d.income.moneyIn);
+    h += row('POS &amp; online deposits', d.income.deposits, 'sub');
+    if (d.income.invoicePayments) h += row('Invoice payments (bank-landed)', d.income.invoicePayments, 'sub');
+    if (d.income.refunds) h += row('Customer refunds', -d.income.refunds, 'sub');
+    h += row('Less: sales tax remitted', -d.income.salesTaxRemitted);
+    h += row('Total income (net revenue)', d.income.netRevenue, 'total');
+    h += '<div class="section">Cost of goods sold</div>';
+    h += row('Inventory purchases (cash, both locations)', d.cogs.inventoryCash);
+    h += row('Freight, repairs &amp; materials', d.cogs.directCosts);
+    h += row('Less: vendor rebates received', -d.cogs.rebateOffsets);
+    h += row('Total COGS', d.cogs.total, 'total');
+    h += row('Gross profit' + (d.grossMarginPct !== null ? ' — ' + d.grossMarginPct.toFixed(1) + '%' : ''), d.grossProfit, 'grand');
+    h += '<div class="section">Expenses</div>';
+    h += row('Operating expenses (books, accrual)', d.expenses.totalFromBooks);
+    if (d.expenses.reimbursements) h += row('Less: reimbursements received', -d.expenses.reimbursements);
+    h += row('Total expenses', d.expenses.net, 'total');
+    h += row('Net operating income', d.noi, 'grand');
+    $('stmt').innerHTML = h;
+    const w = $('warnings');
+    w.innerHTML = '';
+    for (const warn of d.warnings || []) {
+      const div = document.createElement('div');
+      div.textContent = '⚠ ' + warn;
+      w.appendChild(div);
+    }
+    const rows = $('expRows');
+    rows.innerHTML = '';
+    for (const e of d.expenses.rows || []) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = '<td>' + escapeHtml(e.name) + '</td><td class="num">' + usd2.format(e.amount) + '</td>';
+      rows.appendChild(tr);
+    }
+    if (!(d.expenses.rows || []).length) rows.innerHTML = '<tr><td colspan="2" class="empty">Expense detail unavailable from the books report.</td></tr>';
+  } catch (err) {
+    if (err.message !== 'signed out') showBanner('<strong>Error.</strong> ' + escapeHtml(err.message));
+  } finally {
+    setLoading(false);
+  }
+  $('backLink').href = linkWithRange('/');
+}
+async function init() {
+  mountRange((force) => load(force));
+  if (await checkStatus()) load(false);
+}
+init();
+</script>
+</body>
+</html>
