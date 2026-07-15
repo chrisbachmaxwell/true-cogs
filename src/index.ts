@@ -1178,6 +1178,45 @@ app.get(
   })
 );
 
+/** Inventory spend broken down by the account each payment was drawn from —
+ * built to size up pollution from pseudo-bank accounts (e.g. the unreconciled
+ * "ACH" clearing account that recorded vendor payments Jul 2024 – Dec 2025). */
+app.get(
+  '/api/spend-by-funding',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const range = validDateRange(req, res);
+    if (!range) return;
+    const result = await dedupe(`dt:fund:${range.start}:${range.end}`, async () => {
+      const api = await getComputeApi();
+      const ids = (await getTrackedAccounts(api)).map((t) => t.id);
+      const spend = await computeMonthlySpend(api, ids, range);
+      const names = new Map((await api.listAccounts()).map((a: any) => [String(a.Id), a.Name as string]));
+      const by = new Map<string, { name: string; amount: number; count: number }>();
+      for (const t of spend.transactions) {
+        const key = t.fundingAccountId || 'unrecorded';
+        const cur = by.get(key) || {
+          name: t.fundingAccountId ? names.get(t.fundingAccountId) || `Account ${t.fundingAccountId}` : 'No funding account recorded',
+          amount: 0,
+          count: 0,
+        };
+        cur.amount += t.amount;
+        cur.count++;
+        by.set(key, cur);
+      }
+      return {
+        start: range.start,
+        end: range.end,
+        total: spend.total,
+        byFundingAccount: [...by.entries()]
+          .map(([id, v]) => ({ id, ...v, amount: Math.round(v.amount * 100) / 100 }))
+          .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount)),
+      };
+    });
+    res.json(result);
+  })
+);
+
 // ---- automated reconciliation checks ----
 // Every methodology bug found while building this app was caught by one of
 // these tie-outs run by hand; this endpoint runs them all for any range.

@@ -28,6 +28,8 @@ export interface SpendTransaction {
   detail?: string;
   /** QBO transaction id, for deep links into QuickBooks. */
   txnId?: string;
+  /** Account the payment was drawn from (bank or credit card), when recorded. */
+  fundingAccountId?: string;
 }
 
 export interface MonthlySpendResult {
@@ -129,6 +131,8 @@ export async function computeMonthlySpend(
   for (const bp of billPayments) {
     const payMethod = bp.PayType || 'Unknown';
     const vendor = bp.VendorRef?.name || bp.VendorRef?.value || 'Unknown vendor';
+    const fundingAccountId =
+      bp.CheckPayment?.BankAccountRef?.value || bp.CreditCardPayment?.CCAccountRef?.value;
 
     for (const line of bp.Line || []) {
       const linkedTxns: any[] = line.LinkedTxn || [];
@@ -168,6 +172,7 @@ export async function computeMonthlySpend(
         sourceType: 'BillPayment',
         paymentMethod: payMethod,
         txnId: bp.Id ? String(bp.Id) : undefined,
+        fundingAccountId: fundingAccountId ? String(fundingAccountId) : undefined,
         amount: attributed,
         detail:
           `Bill #${bill?.DocNumber || linkedBill.TxnId}: $${inventoryPortionOfBill.toFixed(2)} of ` +
@@ -196,6 +201,7 @@ export async function computeMonthlySpend(
       sourceType: 'Purchase',
       paymentMethod: purchase.PaymentType || 'Unknown',
       txnId: purchase.Id ? String(purchase.Id) : undefined,
+      fundingAccountId: purchase.AccountRef?.value ? String(purchase.AccountRef.value) : undefined,
       amount,
       detail: purchase.Credit === true ? 'Refund/credit-back (Purchase.Credit=true)' : undefined,
     });
