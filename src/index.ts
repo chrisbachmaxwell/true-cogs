@@ -1,7 +1,7 @@
 import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import { config, missingQboConfig } from './config';
-import { initDb, getConfigValue, setConfigValue, getCachedMonth, setCachedMonth } from './db';
+import { initDb, getConfigValue, setConfigValue, getCachedMonth, setCachedMonth, getPool } from './db';
 import { buildAuthUri, handleCallback, createQboApi, connectionStatus, QboApi } from './qbo';
 import { computeMonthlySpend, MonthlySpendResult } from './inventorySpend';
 import { computeMonthlyPnl, MonthlyPnl } from './pnl';
@@ -781,6 +781,67 @@ function validDateRange(req: Request, res: Response): { start: string; end: stri
   return { start, end };
 }
 
+// ---- physical inventory counts (entered monthly; total value, all locations) ----
+
+app.get(
+  '/api/inventory-counts',
+  requireAuth,
+  asyncRoute(async (_req, res) => {
+    const r = await getPool().query(
+      `SELECT as_of, value, note FROM inventory_counts ORDER BY as_of DESC LIMIT 60`
+    );
+    res.json({
+      counts: r.rows.map((row) => ({
+        asOf: row.as_of.toISOString().slice(0, 10),
+        value: Number(row.value),
+        note: row.note,
+      })),
+    });
+  })
+);
+
+app.post(
+  '/api/inventory-counts',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const asOf = String(req.body?.asOf || '');
+    const value = Number(req.body?.value);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(asOf) || !Number.isFinite(value) || value < 0) {
+      return res.status(400).json({ error: 'Provide { asOf: YYYY-MM-DD, value: number ≥ 0 }' });
+    }
+    await getPool().query(
+      `INSERT INTO inventory_counts (as_of, value, note, updated_at) VALUES ($1, $2, $3, now())
+       ON CONFLICT (as_of) DO UPDATE SET value = EXCLUDED.value, note = EXCLUDED.note, updated_at = now()`,
+      [asOf, value, req.body?.note || null]
+    );
+    // Adjusted statements depend on counts — drop cached statements.
+    await getPool().query(`DELETE FROM monthly_cache WHERE month LIKE 'stmt:%'`);
+    res.json({ ok: true });
+  })
+);
+
+app.delete(
+  '/api/inventory-counts',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const asOf = String(req.query.asOf || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(asOf)) return res.status(400).json({ error: 'Provide ?asOf=YYYY-MM-DD' });
+    await getPool().query(`DELETE FROM inventory_counts WHERE as_of = $1`, [asOf]);
+    await getPool().query(`DELETE FROM monthly_cache WHERE month LIKE 'stmt:%'`);
+    res.json({ ok: true });
+  })
+);
+
+/** Most recent count on or before the given date. */
+async function countAsOf(date: string): Promise<{ asOf: string; value: number } | null> {
+  const r = await getPool().query(
+    `SELECT as_of, value FROM inventory_counts WHERE as_of <= $1 ORDER BY as_of DESC LIMIT 1`,
+    [date]
+  );
+  if (!r.rows.length) return null;
+  return { asOf: r.rows[0].as_of.toISOString().slice(0, 10), value: Number(r.rows[0].value) };
+}
+
 /** Full cash P&L statement for an exact date range, with the operating-expense
  * section pulled from the books' accrual P&L for the same period. */
 app.get(
@@ -846,6 +907,26 @@ app.get(
       }
       const r2 = (n: number) => Math.round(n * 100) / 100;
       const expensesNet = r2(expenses.total - pnl.expenseOffsets);
+      // Accounting-basis COGS from physical counts: begin + purchases − end.
+      const beginCount = await countAsOf(dayBefore(range.start));
+      const endCount = await countAsOf(range.end);
+      let adjusted: any = null;
+      if (beginCount && endCount && endCount.asOf >= range.start) {
+        const inventoryChange = r2(endCount.value - beginCount.value);
+        const adjustedCogsTotal = r2(pnl.cogs - inventoryChange + pnl.directCosts - pnl.cogsOffsets);
+        const adjustedGp = r2(pnl.revenueNet - adjustedCogsTotal);
+        adjusted = {
+          beginAsOf: beginCount.asOf,
+          beginValue: beginCount.value,
+          endAsOf: endCount.asOf,
+          endValue: endCount.value,
+          inventoryChange,
+          cogsTotal: adjustedCogsTotal,
+          grossProfit: adjustedGp,
+          grossMarginPct: pnl.revenueNet > 0 ? r2((adjustedGp / pnl.revenueNet) * 100) : null,
+          noi: r2(adjustedGp - expensesNet),
+        };
+      }
       const statement = {
         start: range.start,
         end: range.end,
@@ -875,6 +956,7 @@ app.get(
           rows: expenses.rows,
         },
         noi: r2(pnl.grossProfit - expensesNet),
+        adjusted,
         bankInflows: pnl.bankInflows.total,
         warnings: pnl.warnings,
       };

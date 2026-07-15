@@ -56,6 +56,14 @@ export async function initDb(): Promise<void> {
     CREATE INDEX IF NOT EXISTS qbo_txns_date_idx ON qbo_txns (entity_type, txn_date);
   `);
   await db.query(`
+    CREATE TABLE IF NOT EXISTS inventory_counts (
+      as_of DATE PRIMARY KEY,
+      value NUMERIC NOT NULL,
+      note TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await db.query(`
     CREATE TABLE IF NOT EXISTS monthly_cache (
       month TEXT PRIMARY KEY,
       data JSONB NOT NULL,

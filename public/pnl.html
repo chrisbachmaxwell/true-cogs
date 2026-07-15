@@ -26,6 +26,19 @@
   </div>
 
   <div class="card">
+    <h2>Inventory counts <span class="hint">— physical values (all locations); the statement uses the counts nearest your range</span></h2>
+    <div class="range" style="margin-bottom:14px">
+      <input type="date" id="icDate">
+      <input type="text" id="icValue" placeholder="Total inventory value, e.g. 3264289.74" style="font:inherit;font-size:13px;color:var(--ink);background:var(--surface);border:1px solid var(--hairline);border-radius:10px;padding:7px 11px;width:260px">
+      <button class="btn primary" id="icSave">Save count</button>
+    </div>
+    <div style="overflow-x:auto"><table>
+      <thead><tr><th>As of</th><th class="num">Value</th><th></th></tr></thead>
+      <tbody id="icRows"></tbody>
+    </table></div>
+  </div>
+
+  <div class="card">
     <h2>Operating expenses <span class="hint">— from the books (accrual), largest first</span></h2>
     <div style="overflow-x:auto"><table>
       <thead><tr><th>Expense</th><th class="num">Amount</th></tr></thead>
@@ -54,15 +67,27 @@ async function load(force) {
     h += row('Total income (net revenue)', d.income.netRevenue, 'total');
     h += '<div class="section">Cost of goods sold</div>';
     h += row('Inventory purchases (cash, both locations)', d.cogs.inventoryCash);
+    if (d.adjusted) {
+      h += row('Less: inventory ' + (d.adjusted.inventoryChange >= 0 ? 'increase' : 'decrease') +
+        ' (counts ' + d.adjusted.beginAsOf + ' → ' + d.adjusted.endAsOf + ')', -d.adjusted.inventoryChange, 'sub');
+    }
     h += row('Freight, repairs &amp; materials', d.cogs.directCosts);
     h += row('Less: vendor rebates received', -d.cogs.rebateOffsets);
-    h += row('Total COGS', d.cogs.total, 'total');
-    h += row('Gross profit' + (d.grossMarginPct !== null ? ' — ' + d.grossMarginPct.toFixed(1) + '%' : ''), d.grossProfit, 'grand');
+    if (d.adjusted) {
+      h += row('Total COGS (accounting basis)', d.adjusted.cogsTotal, 'total');
+      h += row('Gross profit' + (d.adjusted.grossMarginPct !== null ? ' — ' + d.adjusted.grossMarginPct.toFixed(1) + '%' : ''), d.adjusted.grossProfit, 'grand');
+    } else {
+      h += row('Total COGS (cash basis — no inventory counts for this range)', d.cogs.total, 'total');
+      h += row('Gross profit' + (d.grossMarginPct !== null ? ' — ' + d.grossMarginPct.toFixed(1) + '%' : ''), d.grossProfit, 'grand');
+    }
     h += '<div class="section">Expenses</div>';
     h += row('Operating expenses (books, accrual)', d.expenses.totalFromBooks);
     if (d.expenses.reimbursements) h += row('Less: reimbursements received', -d.expenses.reimbursements);
     h += row('Total expenses', d.expenses.net, 'total');
-    h += row('Net operating income', d.noi, 'grand');
+    h += row('Net operating income', d.adjusted ? d.adjusted.noi : d.noi, 'grand');
+    if (d.adjusted) {
+      h += row('Memo: cash-basis NOI (before inventory adjustment)', d.noi, 'sub');
+    }
     $('stmt').innerHTML = h;
     const w = $('warnings');
     w.innerHTML = '';
@@ -86,9 +111,45 @@ async function load(force) {
   }
   $('backLink').href = linkWithRange('/');
 }
+async function loadCounts() {
+  try {
+    const d = await jfetch('/api/inventory-counts');
+    const rows = $('icRows');
+    rows.innerHTML = '';
+    for (const c of d.counts) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = '<td>' + c.asOf + '</td><td class="num">' + usd2.format(c.value) + '</td>' +
+        '<td style="text-align:right"><button class="btn" data-del="' + c.asOf + '">Remove</button></td>';
+      rows.appendChild(tr);
+    }
+    if (!d.counts.length) rows.innerHTML = '<tr><td colspan="3" class="empty">No counts yet — add month-end values above.</td></tr>';
+    rows.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', async () => {
+      if (!confirm('Remove the ' + b.dataset.del + ' count?')) return;
+      await fetch('/api/inventory-counts?asOf=' + b.dataset.del, { method: 'DELETE' });
+      loadCounts(); load(false);
+    }));
+  } catch (e) { /* non-fatal */ }
+}
+
+async function saveCount() {
+  const asOf = $('icDate').value;
+  const value = parseFloat($('icValue').value.replace(/[$,]/g, ''));
+  if (!asOf || !Number.isFinite(value)) { alert('Enter a date and a value.'); return; }
+  const res = await fetch('/api/inventory-counts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ asOf, value }),
+  });
+  if (!res.ok) { alert('Save failed'); return; }
+  $('icValue').value = '';
+  loadCounts();
+  load(false);
+}
+
 async function init() {
   mountRange((force) => load(force));
-  if (await checkStatus()) load(false);
+  $('icSave').addEventListener('click', saveCount);
+  if (await checkStatus()) { load(false); loadCounts(); }
 }
 init();
 </script>
