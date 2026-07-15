@@ -17,12 +17,10 @@ export interface AppConfig {
   /** Sales-tax liability account(s): remittances to them are deducted from
    * revenue, because the POS sync books tax-inclusive amounts into income. */
   salesTaxAccounts: string[];
-  /** Resend API key for magic-link sign-in emails. Auth is enforced only when set. */
-  resendApiKey: string | undefined;
-  /** Comma-separated allowlist of emails permitted to sign in. */
-  authAllowedEmails: string;
-  /** From address for sign-in emails. */
-  authFromEmail: string;
+  /** Seeds the first admin when the users table is empty. Auth is enforced
+   * whenever at least one user exists. */
+  adminEmail: string | undefined;
+  adminInitialPassword: string | undefined;
 }
 
 export const config: AppConfig = {
@@ -52,9 +50,8 @@ export const config: AppConfig = {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean),
-  resendApiKey: process.env.RESEND_API_KEY,
-  authAllowedEmails: process.env.AUTH_ALLOWED_EMAILS || 'chrism@pictureline.com',
-  authFromEmail: process.env.AUTH_FROM_EMAIL || 'Pictureline Tracker <onboarding@resend.dev>',
+  adminEmail: process.env.ADMIN_EMAIL || 'chrism@pictureline.com',
+  adminInitialPassword: process.env.ADMIN_INITIAL_PASSWORD,
 };
 
 /** Missing env vars are reported per-feature instead of crashing the whole app,

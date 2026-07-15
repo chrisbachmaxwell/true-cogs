@@ -11,6 +11,8 @@
   <a class="brand" href="/">Pictureline <span>Cash Reports</span></a>
   <div class="spacer"></div>
   <a class="crumb" id="envLine" href="/api/status">…</a>
+  <a class="crumb" id="usersLink" href="/users" style="display:none">Users</a>
+  <a class="crumb" id="pwLink" href="/password" style="display:none">Password</a>
   <a class="crumb" href="/auth/logout">Sign out</a>
 </div></div>
 
@@ -44,6 +46,10 @@
       <div class="icon orange">▥</div>
       <div><div class="t-name">Inventory &amp; COGS</div><div class="t-desc">Monthly trend and transaction-level audit, by location</div></div>
     </a>
+    <a class="tile" id="lnkChecks" href="/checks">
+      <div class="icon green">✓</div>
+      <div><div class="t-name">Checks</div><div class="t-desc">Automatic tie-outs — income vs bank, tax vs ledger, drill-down sums</div></div>
+    </a>
   </div>
 </div>
 
@@ -67,7 +73,7 @@ async function load() {
   } finally {
     setLoading(false);
   }
-  for (const [id, path] of [['lnkPnl','/pnl'],['lnkBank','/bank'],['lnkCash','/cashflow'],['lnkInv','/inventory']]) {
+  for (const [id, path] of [['lnkPnl','/pnl'],['lnkBank','/bank'],['lnkCash','/cashflow'],['lnkInv','/inventory'],['lnkChecks','/checks']]) {
     $(id).href = linkWithRange(path);
   }
 }
@@ -78,6 +84,13 @@ async function init() {
     $('envLine').textContent = s.environment === 'production' ? 'QuickBooks · production' : 'QuickBooks · sandbox';
     load();
   }
+  try {
+    const me = await (await fetch('/auth/me')).json();
+    if (me.enabled && me.user) {
+      $('pwLink').style.display = '';
+      if (me.user.isAdmin) $('usersLink').style.display = '';
+    }
+  } catch (e) { /* non-fatal */ }
 }
 init();
 </script>

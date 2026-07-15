@@ -43,6 +43,15 @@ export async function initDb(): Promise<void> {
     );
   `);
   await db.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      email TEXT PRIMARY KEY,
+      pass_hash TEXT NOT NULL,
+      is_admin BOOLEAN NOT NULL DEFAULT false,
+      must_change BOOLEAN NOT NULL DEFAULT false,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await db.query(`
     CREATE TABLE IF NOT EXISTS qbo_txns (
       entity_type TEXT NOT NULL,
       id TEXT NOT NULL,

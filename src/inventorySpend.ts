@@ -26,6 +26,8 @@ export interface SpendTransaction {
   amount: number;
   /** Audit trail for Bucket 1 allocations. */
   detail?: string;
+  /** QBO transaction id, for deep links into QuickBooks. */
+  txnId?: string;
 }
 
 export interface MonthlySpendResult {
@@ -165,6 +167,7 @@ export async function computeMonthlySpend(
         vendor,
         sourceType: 'BillPayment',
         paymentMethod: payMethod,
+        txnId: bp.Id ? String(bp.Id) : undefined,
         amount: attributed,
         detail:
           `Bill #${bill?.DocNumber || linkedBill.TxnId}: $${inventoryPortionOfBill.toFixed(2)} of ` +
@@ -192,6 +195,7 @@ export async function computeMonthlySpend(
       vendor: purchase.EntityRef?.name || purchase.EntityRef?.value || 'Unknown payee',
       sourceType: 'Purchase',
       paymentMethod: purchase.PaymentType || 'Unknown',
+      txnId: purchase.Id ? String(purchase.Id) : undefined,
       amount,
       detail: purchase.Credit === true ? 'Refund/credit-back (Purchase.Credit=true)' : undefined,
     });

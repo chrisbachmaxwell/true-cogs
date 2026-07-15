@@ -2,19 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 process.env.TOKEN_ENCRYPTION_KEY = 'test-secret';
-process.env.AUTH_ALLOWED_EMAILS = 'chrism@pictureline.com';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { signSession, verifySession } = require('../src/auth');
+const { signSession, verifySession, hashPassword, verifyPassword } = require('../src/auth');
 
-test('session round-trips for an allowlisted email', () => {
+test('session round-trips', () => {
   const cookie = signSession('chrism@pictureline.com');
   assert.equal(verifySession(cookie), 'chrism@pictureline.com');
-});
-
-test('session is case-insensitive on the allowlist', () => {
-  const cookie = signSession('ChrisM@Pictureline.com');
-  assert.equal(verifySession(cookie), 'ChrisM@Pictureline.com');
 });
 
 test('tampered payload is rejected', () => {
@@ -32,7 +26,23 @@ test('expired session is rejected', () => {
   assert.equal(verifySession(cookie), null);
 });
 
-test('validly-signed session for a non-allowlisted email is rejected', () => {
-  const cookie = signSession('someoneelse@pictureline.com');
-  assert.equal(verifySession(cookie), null);
+test('password hash verifies the right password and rejects the wrong one', () => {
+  const stored = hashPassword('correct horse battery');
+  assert.equal(verifyPassword('correct horse battery', stored), true);
+  assert.equal(verifyPassword('correct horse batterY', stored), false);
+  assert.equal(verifyPassword('', stored), false);
+});
+
+test('same password hashes differently per user (random salt)', () => {
+  const a = hashPassword('hunter22222');
+  const b = hashPassword('hunter22222');
+  assert.notEqual(a, b);
+  assert.equal(verifyPassword('hunter22222', a), true);
+  assert.equal(verifyPassword('hunter22222', b), true);
+});
+
+test('malformed stored hashes never verify', () => {
+  assert.equal(verifyPassword('anything', ''), false);
+  assert.equal(verifyPassword('anything', 'plaintext'), false);
+  assert.equal(verifyPassword('anything', 'scrypt$bad$values$$$'), false);
 });

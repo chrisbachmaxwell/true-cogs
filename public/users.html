@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Users · Pictureline</title>
+<link rel="stylesheet" href="/theme.css">
+</head>
+<body>
+<div class="topbar"><div class="topbar-inner">
+  <a class="brand" href="/">Pictureline <span>Cash Reports</span></a>
+  <a class="crumb" href="/">← All reports</a>
+  <div class="spacer"></div>
+  <a class="crumb" href="/password">Change my password</a>
+  <a class="crumb" href="/auth/logout">Sign out</a>
+</div></div>
+
+<div class="wrap">
+  <h1 class="title">Users</h1>
+  <p class="subtitle">Who can sign in to the reports</p>
+  <div class="banner" id="banner"></div>
+
+  <div class="card" style="margin-top:22px">
+    <h2>Add a user <span class="hint">— they'll be asked to pick their own password on first sign-in</span></h2>
+    <div class="range" style="margin-bottom:6px">
+      <input type="email" id="uEmail" placeholder="email@pictureline.com" style="font:inherit;font-size:13px;color:var(--ink);background:var(--surface);border:1px solid var(--hairline);border-radius:10px;padding:7px 11px;width:240px">
+      <input type="text" id="uPass" placeholder="Temporary password (8+ chars)" style="font:inherit;font-size:13px;color:var(--ink);background:var(--surface);border:1px solid var(--hairline);border-radius:10px;padding:7px 11px;width:220px">
+      <label style="font-size:13px;color:var(--ink-2)"><input type="checkbox" id="uAdmin"> admin</label>
+      <button class="btn primary" id="uAdd">Add user</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Current users</h2>
+    <div style="overflow-x:auto"><table>
+      <thead><tr><th>Email</th><th>Role</th><th>Status</th><th></th></tr></thead>
+      <tbody id="uRows"></tbody>
+    </table></div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+<script>
+async function load() {
+  try {
+    const d = await jfetch('/api/users');
+    const rows = $('uRows');
+    rows.innerHTML = '';
+    for (const u of d.users) {
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td>' + escapeHtml(u.email) + '</td>' +
+        '<td>' + (u.isAdmin ? 'Admin' : 'Viewer') + '</td>' +
+        '<td>' + (u.mustChange ? 'Must set password on next sign-in' : 'Active') + '</td>' +
+        '<td style="text-align:right">' +
+          '<button class="btn" data-reset="' + escapeHtml(u.email) + '">Reset password</button> ' +
+          '<button class="btn" data-del="' + escapeHtml(u.email) + '">Remove</button></td>';
+      rows.appendChild(tr);
+    }
+    rows.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', async () => {
+      if (!confirm('Remove ' + b.dataset.del + '? They will be signed out immediately.')) return;
+      const res = await fetch('/api/users?email=' + encodeURIComponent(b.dataset.del), { method: 'DELETE' });
+      if (!res.ok) { const d2 = await res.json().catch(() => ({})); showBanner('<strong>Couldn’t remove.</strong> ' + escapeHtml(d2.error || '')); }
+      load();
+    }));
+    rows.querySelectorAll('[data-reset]').forEach((b) => b.addEventListener('click', async () => {
+      const pw = prompt('Temporary password for ' + b.dataset.reset + ' (they’ll change it on sign-in):');
+      if (!pw) return;
+      const res = await fetch('/api/users', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: b.dataset.reset, password: pw }),
+      });
+      const d2 = await res.json().catch(() => ({}));
+      if (!res.ok) showBanner('<strong>Couldn’t reset.</strong> ' + escapeHtml(d2.error || ''));
+      load();
+    }));
+  } catch (err) {
+    if (err.message !== 'signed out') showBanner('<strong>Error.</strong> ' + escapeHtml(err.message) + ' (Only admins can manage users.)');
+  }
+}
+$('uAdd').addEventListener('click', async () => {
+  const email = $('uEmail').value.trim();
+  const password = $('uPass').value;
+  const res = await fetch('/api/users', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password, isAdmin: $('uAdmin').checked }),
+  });
+  const d = await res.json().catch(() => ({}));
+  if (!res.ok) { showBanner('<strong>Couldn’t add.</strong> ' + escapeHtml(d.error || '')); return; }
+  $('uEmail').value = ''; $('uPass').value = ''; $('uAdmin').checked = false;
+  load();
+});
+load();
+</script>
+</body>
+</html>

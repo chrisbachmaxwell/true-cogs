@@ -3,20 +3,134 @@ import { Request, Response, NextFunction } from 'express';
 import { config } from './config';
 import { getPool } from './db';
 
-// Email magic-link auth for a single-user internal tool. Login tokens are
-// random 256-bit values stored hashed in Postgres with a 15-minute expiry;
-// sessions are stateless HMAC-signed cookies (30 days).
+// Password-based auth for a small internal tool. Passwords are scrypt-hashed
+// with per-user salts; sessions are stateless HMAC-signed cookies (30 days)
+// rechecked against the users table on every request, so removing a user kills
+// their sessions immediately. The gate enforces whenever any user exists; the
+// first admin is seeded from ADMIN_EMAIL/ADMIN_INITIAL_PASSWORD at boot and
+// must change the password on first sign-in.
 
-const LOGIN_TOKEN_TTL_MS = 15 * 60 * 1000;
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const SESSION_COOKIE = 'plt_session';
 
-export function authConfigured(): boolean {
-  return Boolean(config.resendApiKey && config.tokenEncryptionKey && config.databaseUrl);
+export interface User {
+  email: string;
+  isAdmin: boolean;
+  mustChange: boolean;
 }
 
-function allowedEmails(): string[] {
-  return config.authAllowedEmails.split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
+// ---- password hashing (scrypt, self-describing format) ----
+
+const SCRYPT = { N: 16384, r: 8, p: 1, keyLen: 32 };
+
+export function hashPassword(password: string): string {
+  const salt = crypto.randomBytes(16);
+  const hash = crypto.scryptSync(password, salt, SCRYPT.keyLen, SCRYPT);
+  return `scrypt$${SCRYPT.N}$${SCRYPT.r}$${SCRYPT.p}$${salt.toString('hex')}$${hash.toString('hex')}`;
+}
+
+export function verifyPassword(password: string, stored: string): boolean {
+  try {
+    const [scheme, n, r, p, saltHex, hashHex] = stored.split('$');
+    if (scheme !== 'scrypt') return false;
+    const expected = Buffer.from(hashHex, 'hex');
+    const actual = crypto.scryptSync(password, Buffer.from(saltHex, 'hex'), expected.length, {
+      N: Number(n),
+      r: Number(r),
+      p: Number(p),
+    });
+    return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+  } catch {
+    return false;
+  }
+}
+
+// ---- users table ----
+
+const normalize = (email: string) => String(email || '').trim().toLowerCase();
+
+export async function getUser(email: string): Promise<(User & { passHash: string }) | null> {
+  const r = await getPool().query(
+    `SELECT email, pass_hash, is_admin, must_change FROM users WHERE email = $1`,
+    [normalize(email)]
+  );
+  if (!r.rows.length) return null;
+  const row = r.rows[0];
+  return { email: row.email, passHash: row.pass_hash, isAdmin: row.is_admin, mustChange: row.must_change };
+}
+
+export async function listUsers(): Promise<(User & { createdAt: string })[]> {
+  const r = await getPool().query(
+    `SELECT email, is_admin, must_change, created_at FROM users ORDER BY created_at`
+  );
+  return r.rows.map((row) => ({
+    email: row.email,
+    isAdmin: row.is_admin,
+    mustChange: row.must_change,
+    createdAt: row.created_at.toISOString(),
+  }));
+}
+
+export async function upsertUser(
+  email: string,
+  password: string,
+  opts: { isAdmin?: boolean; mustChange?: boolean } = {}
+): Promise<void> {
+  await getPool().query(
+    `INSERT INTO users (email, pass_hash, is_admin, must_change)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (email) DO UPDATE
+       SET pass_hash = EXCLUDED.pass_hash, must_change = EXCLUDED.must_change`,
+    [normalize(email), hashPassword(password), opts.isAdmin === true, opts.mustChange !== false]
+  );
+  invalidateEnabledCache();
+}
+
+export async function setPassword(email: string, password: string): Promise<void> {
+  await getPool().query(
+    `UPDATE users SET pass_hash = $2, must_change = false WHERE email = $1`,
+    [normalize(email), hashPassword(password)]
+  );
+}
+
+export async function deleteUser(email: string): Promise<void> {
+  await getPool().query(`DELETE FROM users WHERE email = $1`, [normalize(email)]);
+  invalidateEnabledCache();
+}
+
+/** Seeds the first admin from env when the users table is empty. */
+export async function bootstrapAdmin(): Promise<void> {
+  const r = await getPool().query(`SELECT count(*)::int AS n FROM users`);
+  if (r.rows[0].n > 0) return;
+  if (!config.adminEmail || !config.adminInitialPassword) {
+    console.warn(
+      '[auth] no users and no ADMIN_EMAIL/ADMIN_INITIAL_PASSWORD set — dashboard remains open'
+    );
+    return;
+  }
+  await upsertUser(config.adminEmail, config.adminInitialPassword, { isAdmin: true, mustChange: true });
+  console.log(`[auth] seeded first admin ${normalize(config.adminEmail)} (password change required on first sign-in)`);
+}
+
+// Auth enforces whenever any user exists. Cached briefly so every request
+// doesn't hit the table; user mutations invalidate it.
+let enabledCache: { value: boolean; at: number } | null = null;
+const ENABLED_TTL_MS = 30_000;
+
+function invalidateEnabledCache(): void {
+  enabledCache = null;
+}
+
+export async function authEnabled(): Promise<boolean> {
+  if (!config.databaseUrl) return false;
+  if (enabledCache && Date.now() - enabledCache.at < ENABLED_TTL_MS) return enabledCache.value;
+  try {
+    const r = await getPool().query(`SELECT count(*)::int AS n FROM users`);
+    enabledCache = { value: r.rows[0].n > 0, at: Date.now() };
+    return enabledCache.value;
+  } catch {
+    return false; // schema not ready yet — stay open rather than lock out
+  }
 }
 
 // ---- session cookies ----
@@ -33,6 +147,7 @@ export function signSession(email: string, now = Date.now()): string {
   return `${payload}.${hmac(payload)}`;
 }
 
+/** Signature + expiry check only; the caller confirms the user still exists. */
 export function verifySession(cookie: string | undefined, now = Date.now()): string | null {
   if (!cookie) return null;
   const [payload, sig] = cookie.split('.');
@@ -45,7 +160,6 @@ export function verifySession(cookie: string | undefined, now = Date.now()): str
     const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
     if (typeof data.email !== 'string' || typeof data.exp !== 'number') return null;
     if (data.exp < now) return null;
-    if (!allowedEmails().includes(data.email.toLowerCase())) return null;
     return data.email;
   } catch {
     return null;
@@ -61,92 +175,80 @@ function parseCookies(req: Request): Record<string, string> {
   return out;
 }
 
-export function sessionEmail(req: Request): string | null {
-  return verifySession(parseCookies(req)[SESSION_COOKIE]);
+/** The signed-in user, verified against the users table. */
+export async function sessionUser(req: Request): Promise<User | null> {
+  const email = verifySession(parseCookies(req)[SESSION_COOKIE]);
+  if (!email) return null;
+  const user = await getUser(email);
+  if (!user) return null;
+  return { email: user.email, isAdmin: user.isAdmin, mustChange: user.mustChange };
 }
 
-/** Gate for data-bearing routes. When auth isn't configured (no RESEND_API_KEY)
- * the app stays open, preserving the pre-auth behavior for initial setup. */
-export function requireAuth(req: Request, res: Response, next: NextFunction): void {
-  if (!authConfigured() || sessionEmail(req)) return next();
-  // originalUrl, not path: inside a mounted middleware req.path is mount-relative.
-  if (req.originalUrl.startsWith('/api/')) {
-    res.status(401).json({ error: 'Not signed in' });
-  } else {
-    res.redirect('/login');
-  }
-}
+// ---- login rate limiting: max 10 attempts per address per 15 minutes ----
 
-// ---- magic links ----
+const recentAttempts = new Map<string, number[]>();
 
-const sha256 = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
-
-// Basic abuse guard: max 3 link requests per address per 15 minutes.
-const recentRequests = new Map<string, number[]>();
-
-function rateLimited(email: string): boolean {
+export function loginRateLimited(email: string): boolean {
   const now = Date.now();
-  const times = (recentRequests.get(email) || []).filter((t) => now - t < 15 * 60 * 1000);
-  if (times.length >= 3) return true;
+  const times = (recentAttempts.get(normalize(email)) || []).filter((t) => now - t < 15 * 60 * 1000);
+  if (times.length >= 10) return true;
   times.push(now);
-  recentRequests.set(email, times);
+  recentAttempts.set(normalize(email), times);
   return false;
 }
 
-async function sendLoginEmail(to: string, link: string): Promise<void> {
-  const res = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${config.resendApiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      from: config.authFromEmail,
-      to: [to],
-      subject: 'Sign in to the Pictureline inventory tracker',
-      html:
-        `<p>Click to sign in (link is valid for 15 minutes and can be used once):</p>` +
-        `<p><a href="${link}">Sign in to the inventory tracker</a></p>` +
-        `<p style="color:#888;font-size:12px">If you didn't request this, you can ignore it.</p>`,
-    }),
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Resend API error ${res.status}: ${body}`);
+/** Verifies credentials. Generic null on any failure — no enumeration. */
+export async function verifyLogin(email: string, password: string): Promise<User | null> {
+  if (loginRateLimited(email)) {
+    console.warn(`[auth] rate-limited login attempts for ${normalize(email)}`);
+    return null;
   }
+  const user = await getUser(email);
+  if (!user || !verifyPassword(String(password || ''), user.passHash)) return null;
+  return { email: user.email, isAdmin: user.isAdmin, mustChange: user.mustChange };
 }
 
-/** Issues a login link if the email is on the allowlist. Always resolves without
- * revealing whether the address was accepted. */
-export async function requestLoginLink(rawEmail: string, baseUrl: string): Promise<void> {
-  const email = String(rawEmail || '').trim().toLowerCase();
-  if (!allowedEmails().includes(email)) {
-    console.warn(`[auth] login requested for non-allowlisted address`);
-    return;
-  }
-  if (rateLimited(email)) {
-    console.warn(`[auth] rate-limited login request for ${email}`);
-    return;
-  }
-  const token = crypto.randomBytes(32).toString('base64url');
-  await getPool().query(
-    `INSERT INTO login_tokens (token_hash, email, expires_at) VALUES ($1, $2, $3)`,
-    [sha256(token), email, new Date(Date.now() + LOGIN_TOKEN_TTL_MS)]
-  );
-  await sendLoginEmail(email, `${baseUrl}/auth/verify?token=${token}`);
-  console.log(`[auth] login link sent to ${email}`);
+// ---- route gates ----
+
+const isApi = (req: Request) => req.originalUrl.startsWith('/api/');
+
+/** Gate for data-bearing routes. Open until a first user exists (initial setup);
+ * after that every request needs a session for a still-existing user, and a
+ * user flagged must_change can only reach the password-change flow. */
+export function requireAuth(req: Request, res: Response, next: NextFunction): void {
+  (async () => {
+    if (!(await authEnabled())) return next();
+    const user = await sessionUser(req);
+    if (!user) {
+      // originalUrl, not path: inside a mounted middleware req.path is mount-relative.
+      if (isApi(req)) res.status(401).json({ error: 'Not signed in' });
+      else res.redirect('/login');
+      return;
+    }
+    if (user.mustChange && !req.originalUrl.startsWith('/password') && !req.originalUrl.startsWith('/auth/')) {
+      if (isApi(req)) res.status(403).json({ error: 'Password change required', mustChange: true });
+      else res.redirect('/password');
+      return;
+    }
+    (req as any).user = user;
+    next();
+  })().catch(next);
 }
 
-/** Consumes a login token; returns the email on success, null otherwise. */
-export async function consumeLoginToken(token: string): Promise<string | null> {
-  if (!token) return null;
-  const res = await getPool().query(
-    `UPDATE login_tokens SET used = true
-     WHERE token_hash = $1 AND used = false AND expires_at > now()
-     RETURNING email`,
-    [sha256(token)]
-  );
-  return res.rows.length ? res.rows[0].email : null;
+/** Admin-only gate; run after requireAuth. */
+export function requireAdmin(req: Request, res: Response, next: NextFunction): void {
+  (async () => {
+    const user = ((req as any).user as User | undefined) ?? (await sessionUser(req));
+    if (!(await authEnabled())) {
+      // No users yet — nothing to administer; the boot seed creates the admin.
+      res.status(503).json({ error: 'No users exist yet. Set ADMIN_EMAIL and ADMIN_INITIAL_PASSWORD, then redeploy.' });
+      return;
+    }
+    if (!user) return void res.status(401).json({ error: 'Not signed in' });
+    if (!user.isAdmin) return void res.status(403).json({ error: 'Admin only' });
+    (req as any).user = user;
+    next();
+  })().catch(next);
 }
 
 export function setSessionCookie(res: Response, email: string): void {
