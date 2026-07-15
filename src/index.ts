@@ -403,7 +403,6 @@ async function getMonthlyPnl(month: string, forceRefresh: boolean): Promise<Mont
       {
         bankAccountIds: (await getBankAccounts(api)).map((b) => b.id),
         retailIncomeAccountIds: (await getRetailIncomeAccounts(api)).map((r) => r.id),
-        itemIncomeAccount: await getItemIncomeMap(api),
         accountTypes: new Map(
           (await api.listAccounts()).map((a: any) => [String(a.Id), a.AccountType as string])
         ),

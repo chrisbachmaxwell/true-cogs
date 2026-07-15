@@ -1,5 +1,5 @@
 import { QboApi } from './qbo';
-import { monthDateRange, positiveLineTotal } from './inventorySpend';
+import { monthDateRange } from './inventorySpend';
 
 // Cash-view income for a month, mirroring the COGS methodology: only actual
 // money-movement transactions count (never journal entries), and only the
@@ -97,8 +97,6 @@ export function itemRetailPortion(
 export interface PnlContext {
   bankAccountIds: string[];
   retailIncomeAccountIds: string[];
-  /** itemId → income account id (from Item.IncomeAccountRef). */
-  itemIncomeAccount: Map<string, string>;
   /** accountId → AccountType, for classifying non-income deposit lines. */
   accountTypes?: Map<string, string>;
 }
@@ -155,36 +153,13 @@ export async function computeMonthlyPnl(
     );
   }
 
-  let srRetail = 0;
-  for (const sr of salesReceipts) srRetail += itemRetailPortion(sr, retailIds, ctx.itemIncomeAccount);
-
-  let refundRetail = 0;
-  for (const rr of refundReceipts) refundRetail += itemRetailPortion(rr, retailIds, ctx.itemIncomeAccount);
-
-  // Invoice payments: allocate each payment line by the linked invoice's retail
-  // share, fetching each invoice once (mirror of the Bill cache in Bucket 1).
-  const invoiceCache = new Map<string, Promise<any>>();
-  const getInvoice = (id: string) => {
-    let p = invoiceCache.get(id);
-    if (!p) {
-      p = api.getInvoice(id);
-      invoiceCache.set(id, p);
-    }
-    return p;
-  };
-
-  let paymentRetail = 0;
-  for (const pay of payments) {
-    for (const line of pay.Line || []) {
-      const linkedInvoice = (line.LinkedTxn || []).find((t: any) => t.TxnType === 'Invoice');
-      if (!linkedInvoice) continue;
-      const invoice = await getInvoice(linkedInvoice.TxnId);
-      const retailPortion = itemRetailPortion(invoice, retailIds, ctx.itemIncomeAccount);
-      const chargeTotal = positiveLineTotal(invoice) || Number(invoice?.TotalAmt) || 0;
-      if (chargeTotal <= 0 || retailPortion <= 0) continue;
-      paymentRetail += (Number(line.Amount) || 0) * (retailPortion / chargeTotal);
-    }
-  }
+  // Customer money in counts at full, tax-inclusive value — the same convention
+  // the POS deposits carry — so sales tax is deducted exactly once, via the
+  // remittance line. Costs of every invoiced element (shipping, fees) sit in
+  // expenses, so their revenue counts too.
+  const srRetail = totalAmt(salesReceipts);
+  const refundRetail = totalAmt(refundReceipts);
+  const paymentRetail = totalAmt(payments);
 
   const retailTotal = round2(depositRetail + srRetail + paymentRetail - refundRetail);
 
@@ -193,21 +168,6 @@ export async function computeMonthlyPnl(
   const directSr = totalAmt(salesReceipts.filter(toBank));
   const directPay = totalAmt(payments.filter(toBank));
   const bankTotal = round2(bankDeposits + directSr + directPay);
-
-  const unmappedItems = salesReceipts
-    .concat(refundReceipts)
-    .flatMap((t) => t.Line || [])
-    .filter(
-      (l: any) =>
-        l.DetailType === 'SalesItemLineDetail' &&
-        l.SalesItemLineDetail?.ItemRef?.value &&
-        !ctx.itemIncomeAccount.has(l.SalesItemLineDetail.ItemRef.value)
-    ).length;
-  if (unmappedItems > 0) {
-    warnings.push(
-      `${unmappedItems} sale line(s) reference items with no income-account mapping — treated as non-retail.`
-    );
-  }
 
   return {
     month,
