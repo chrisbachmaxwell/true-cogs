@@ -30,7 +30,8 @@ export type EntityName =
   | 'Deposit'
   | 'SalesReceipt'
   | 'Payment'
-  | 'RefundReceipt';
+  | 'RefundReceipt'
+  | 'Transfer';
 
 const FINDER_BY_ENTITY: Record<EntityName, string> = {
   BillPayment: 'findBillPayments',
@@ -42,6 +43,7 @@ const FINDER_BY_ENTITY: Record<EntityName, string> = {
   SalesReceipt: 'findSalesReceipts',
   Payment: 'findPayments',
   RefundReceipt: 'findRefundReceipts',
+  Transfer: 'findTransfers',
 };
 
 function oauthClient(): any {

@@ -6,6 +6,7 @@ import { buildAuthUri, handleCallback, createQboApi, connectionStatus, QboApi } 
 import { computeMonthlySpend, MonthlySpendResult } from './inventorySpend';
 import { computeMonthlyPnl, MonthlyPnl } from './pnl';
 import { computeCashFlow } from './cashflow';
+import { computeBankFlow } from './bankflow';
 import { monthDateRange } from './inventorySpend';
 import {
   authConfigured,
@@ -499,6 +500,43 @@ app.get(
     }
     const api = await createQboApi();
     const result = await computeCashFlow(api, asOfStart, asOfEnd);
+    await setCachedMonth(cacheKey, result);
+    res.json(result);
+  })
+);
+
+/** Direct-method bank reconciliation over the range: every inflow and every
+ * categorizable outflow, with the API-invisible remainder reported honestly. */
+app.get(
+  '/api/bank-flow',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const range = validRange(req, res);
+    if (!range) return;
+    const startDate = monthDateRange(range.start).start;
+    const endDate = monthDateRange(range.end).end;
+    const cacheKey = `bf:${startDate}:${endDate}`;
+    if (req.query.refresh !== '1') {
+      const cached = await getCachedMonth(cacheKey);
+      const endIsClosed = range.end < currentMonthUtc();
+      if (cached && (endIsClosed || Date.now() - new Date(cached.computedAt).getTime() < CURRENT_MONTH_CACHE_TTL_MS)) {
+        return res.json(cached.data);
+      }
+    }
+    const api = await createQboApi();
+    const banks = await getBankAccounts(api);
+    const inventoryIds = (await getTrackedAccounts(api)).map((t) => t.id);
+    // Actual bank change comes from the balance-sheet diff at the range edges.
+    let actualBankChange: number | null = null;
+    try {
+      const cf = await computeCashFlow(api, dayBefore(startDate), endDate);
+      actualBankChange = cf.bankChange;
+    } catch (err: any) {
+      console.warn('[bank-flow] balance sheet unavailable:', err.message);
+    }
+    const result = await computeBankFlow(
+      api, banks.map((b) => b.id), inventoryIds, startDate, endDate, actualBankChange
+    );
     await setCachedMonth(cacheKey, result);
     res.json(result);
   })
