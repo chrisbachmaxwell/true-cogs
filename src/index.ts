@@ -42,7 +42,7 @@ app.get(
   asyncRoute(async (req, res) => {
     await handleCallback(req.originalUrl);
     // Account id can change between companies/environments — re-resolve on reconnect.
-    await setConfigValue(ACCOUNT_IDS_KEY, '');
+    await setConfigValue(ACCOUNTS_KEY, '');
     res.redirect('/?connected=1');
   })
 );
@@ -93,7 +93,13 @@ app.get('/auth/logout', (_req, res) => {
 
 app.use(['/api/inventory-spend', '/api/inventory-spend/trend', '/api/status'], requireAuth);
 
-const ACCOUNT_IDS_KEY = 'inventory_account_ids';
+const ACCOUNTS_KEY = 'inventory_accounts_json';
+
+interface TrackedAccount {
+  id: string;
+  acctNum: string | null;
+  name: string;
+}
 
 /** Resolves each configured token (account number or exact name, case-insensitive)
  * against the chart of accounts. Result is cached; /callback clears it. */
@@ -125,16 +131,51 @@ async function resolveInventoryAccounts(api: QboApi): Promise<any[]> {
   return matched;
 }
 
-async function getInventoryAccountIds(api: QboApi): Promise<string[]> {
-  const cached = await getConfigValue(ACCOUNT_IDS_KEY);
-  if (cached) return cached.split(',');
-  const accounts = await resolveInventoryAccounts(api);
-  const ids = accounts.map((a) => String(a.Id));
-  await setConfigValue(ACCOUNT_IDS_KEY, ids.join(','));
+/** Tracked accounts, resolved once and stored so cache keys and view filters
+ * work without hitting QuickBooks. Cleared on /callback. */
+async function getTrackedAccounts(api?: QboApi): Promise<TrackedAccount[]> {
+  const cached = await getConfigValue(ACCOUNTS_KEY);
+  if (cached) return JSON.parse(cached) as TrackedAccount[];
+  const resolved = await resolveInventoryAccounts(api ?? (await createQboApi()));
+  const tracked: TrackedAccount[] = resolved.map((a) => ({
+    id: String(a.Id),
+    acctNum: a.AcctNum ?? null,
+    name: a.Name,
+  }));
+  await setConfigValue(ACCOUNTS_KEY, JSON.stringify(tracked));
   console.log(
-    `[qbo] resolved inventory accounts: ${accounts.map((a) => `${a.Name} (#${a.AcctNum || '?'} → Id ${a.Id})`).join(', ')}`
+    `[qbo] resolved inventory accounts: ${tracked.map((t) => `${t.name} (#${t.acctNum || '?'} → Id ${t.id})`).join(', ')}`
   );
-  return ids;
+  return tracked;
+}
+
+/** ?accounts=all (default) or a comma list of account numbers/names, e.g.
+ * ?accounts=11901. Returns the ids to filter by and a stable cache-key suffix. */
+function selectAccounts(
+  param: unknown,
+  tracked: TrackedAccount[]
+): { ids: string[]; viewKey: string } {
+  const raw = String(param || 'all').trim();
+  if (!raw || raw.toLowerCase() === 'all') {
+    return { ids: tracked.map((t) => t.id), viewKey: 'all' };
+  }
+  const tokens = raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  const selected = tracked.filter(
+    (t) => tokens.includes((t.acctNum || '').toLowerCase()) || tokens.includes(t.name.toLowerCase())
+  );
+  if (selected.length !== tokens.length) {
+    throw Object.assign(
+      new Error(
+        `Unknown account filter "${raw}". Tracked accounts: ` +
+          tracked.map((t) => `#${t.acctNum || '?'} ${t.name}`).join(', ')
+      ),
+      { statusCode: 400 }
+    );
+  }
+  return {
+    ids: selected.map((t) => t.id),
+    viewKey: selected.map((t) => t.acctNum || t.id).sort().join('+'),
+  };
 }
 
 function currentMonthUtc(): string {
@@ -144,28 +185,36 @@ function currentMonthUtc(): string {
 const CURRENT_MONTH_CACHE_TTL_MS = 60 * 60 * 1000; // re-compute the open month hourly
 
 // The dashboard requests the current month and the trend at once; both can ask
-// for the same uncached month, so identical computations share one promise.
+// for the same uncached month+view, so identical computations share one promise.
 const inFlightMonths = new Map<string, Promise<MonthlySpendResult>>();
 
-async function getMonthlySpend(month: string, forceRefresh: boolean): Promise<MonthlySpendResult> {
+async function getMonthlySpend(
+  month: string,
+  forceRefresh: boolean,
+  accountsParam?: unknown
+): Promise<MonthlySpendResult> {
+  const tracked = await getTrackedAccounts();
+  const { ids, viewKey } = selectAccounts(accountsParam, tracked);
+  // 'all' keeps the bare-month key so pre-view cache rows stay valid.
+  const cacheKey = viewKey === 'all' ? month : `${month}:${viewKey}`;
+
   if (!forceRefresh) {
-    const cached = await getCachedMonth(month);
+    const cached = await getCachedMonth(cacheKey);
     if (cached) {
       const isClosedMonth = month < currentMonthUtc();
       const fresh = Date.now() - new Date(cached.computedAt).getTime() < CURRENT_MONTH_CACHE_TTL_MS;
       if (isClosedMonth || fresh) return cached.data as MonthlySpendResult;
     }
-    const inFlight = inFlightMonths.get(month);
+    const inFlight = inFlightMonths.get(cacheKey);
     if (inFlight) return inFlight;
   }
   const promise = (async () => {
     const api = await createQboApi();
-    const accountIds = await getInventoryAccountIds(api);
-    const result = await computeMonthlySpend(api, accountIds, month);
-    await setCachedMonth(month, result);
+    const result = await computeMonthlySpend(api, ids, month);
+    await setCachedMonth(cacheKey, result);
     return result;
-  })().finally(() => inFlightMonths.delete(month));
-  inFlightMonths.set(month, promise);
+  })().finally(() => inFlightMonths.delete(cacheKey));
+  inFlightMonths.set(cacheKey, promise);
   return promise;
 }
 
@@ -176,7 +225,7 @@ app.get(
     if (!/^\d{4}-\d{2}$/.test(month)) {
       return res.status(400).json({ error: 'Provide ?month=YYYY-MM' });
     }
-    const result = await getMonthlySpend(month, req.query.refresh === '1');
+    const result = await getMonthlySpend(month, req.query.refresh === '1', req.query.accounts);
     res.json(result);
   })
 );
@@ -190,7 +239,7 @@ app.get(
     for (let i = months - 1; i >= 0; i--) {
       const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
       const month = d.toISOString().slice(0, 7);
-      const r = await getMonthlySpend(month, false);
+      const r = await getMonthlySpend(month, false, req.query.accounts);
       list.push({
         month,
         total: r.total,
@@ -216,16 +265,7 @@ app.get(
       // account number can be verified against the books.
       try {
         const api = await createQboApi();
-        const ids = new Set(await getInventoryAccountIds(api));
-        const accounts = (await api.listAccounts()).filter((a) => ids.has(String(a.Id)));
-        status.inventoryAccounts = accounts.map((a) => ({
-          id: a.Id,
-          name: a.Name,
-          acctNum: a.AcctNum ?? null,
-          fullyQualifiedName: a.FullyQualifiedName,
-          type: a.AccountType,
-          active: a.Active,
-        }));
+        status.inventoryAccounts = await getTrackedAccounts(api);
       } catch (err: any) {
         status.inventoryAccountError = err.message;
       }
@@ -242,7 +282,7 @@ app.get(['/', '/index.html'], requireAuth, (_req, res) => {
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   console.error('[error]', err);
-  res.status(500).json({ error: err.message || 'Internal error' });
+  res.status(err.statusCode || 500).json({ error: err.message || 'Internal error' });
 });
 
 async function main() {

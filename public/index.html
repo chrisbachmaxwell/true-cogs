@@ -62,6 +62,10 @@
   }
   button { cursor: pointer; }
   button:hover { border-color: var(--baseline); }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .seg button { border: none; border-radius: 0; padding: 6px 10px; background: var(--surface-1); }
+  .seg button + button { border-left: 1px solid var(--border); }
+  .seg button.active { background: var(--series-1); color: #fff; }
   .banner {
     border: 1px solid var(--warning-border);
     background: var(--warning-bg);
@@ -110,6 +114,7 @@
     <span class="env" id="env"></span>
     <div class="controls">
       <span id="loading">loading…</span>
+      <span class="seg" id="acctToggle"></span>
       <input type="month" id="monthPicker">
       <button id="refreshBtn" title="Recompute from QuickBooks, bypassing cache">Refresh</button>
       <a href="/auth/logout" style="color:var(--text-muted);font-size:12px;align-self:center">Sign out</a>
@@ -172,6 +177,35 @@
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 const $ = (id) => document.getElementById(id);
 let chart = null;
+let accountsFilter = 'all'; // 'all' or a single account number
+
+function acctQuery() {
+  return accountsFilter === 'all' ? '' : '&accounts=' + encodeURIComponent(accountsFilter);
+}
+
+function buildAcctToggle(accounts) {
+  const box = $('acctToggle');
+  box.innerHTML = '';
+  if (!accounts || accounts.length < 2) return;
+  const options = [{ key: 'all', label: 'Both' }].concat(
+    accounts.map((a) => ({ key: a.acctNum || a.name, label: '#' + (a.acctNum || a.name) }))
+  );
+  for (const opt of options) {
+    const b = document.createElement('button');
+    b.textContent = opt.label;
+    b.title = opt.key === 'all' ? accounts.map((a) => a.name).join(' + ')
+      : (accounts.find((a) => (a.acctNum || a.name) === opt.key) || {}).name || '';
+    if (opt.key === accountsFilter) b.classList.add('active');
+    b.addEventListener('click', () => {
+      accountsFilter = opt.key;
+      for (const other of box.children) other.classList.remove('active');
+      b.classList.add('active');
+      loadMonth(false);
+      loadTrend();
+    });
+    box.appendChild(b);
+  }
+}
 
 function css(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -207,6 +241,7 @@ async function loadStatus() {
   if (s.staleWarning) {
     showBanner('<strong>Connection warning.</strong> ' + s.staleWarning + ' <a class="connect" href="/connect">Reconnect</a>');
   }
+  buildAcctToggle(s.inventoryAccounts || []);
   return true;
 }
 
@@ -307,7 +342,7 @@ async function loadMonth(forceRefresh) {
   const month = $('monthPicker').value || defaultMonth();
   $('loading').classList.add('show');
   try {
-    const res = await fetch('/api/inventory-spend?month=' + month + (forceRefresh ? '&refresh=1' : ''));
+    const res = await fetch('/api/inventory-spend?month=' + month + (forceRefresh ? '&refresh=1' : '') + acctQuery());
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || res.statusText);
     renderMonth(data);
@@ -320,7 +355,7 @@ async function loadMonth(forceRefresh) {
 
 async function loadTrend() {
   try {
-    const res = await fetch('/api/inventory-spend/trend?months=12');
+    const res = await fetch('/api/inventory-spend/trend?months=12' + acctQuery());
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || res.statusText);
     renderChart(data.months);
