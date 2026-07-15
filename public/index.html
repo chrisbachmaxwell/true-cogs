@@ -337,9 +337,11 @@ function renderCashFlow(cf) {
     const div = document.createElement('div');
     div.className = 'move';
     const pct = Math.max(3, Math.round((Math.abs(m.cashEffect) / maxAbs) * 100));
+    const heldTax = /sales tax|w\/h tax|withholding/i.test(m.name);
     div.innerHTML =
       '<span class="m-name" title="' + escapeHtml(m.name) + ' (' + escapeHtml(m.type) + ')">' +
-        (m.acctNum ? '#' + m.acctNum + ' ' : '') + escapeHtml(m.name) + '</span>' +
+        (m.acctNum ? '#' + m.acctNum + ' ' : '') + escapeHtml(m.name) +
+        (heldTax ? ' <span style="color:var(--text-muted)">· held tax passed through, not an expense</span>' : '') + '</span>' +
       '<span class="m-amt ' + (freed ? 'freed' : 'used') + '">' + (freed ? '+' : '−') + usd.format(Math.abs(m.cashEffect)) + '</span>' +
       '<span class="m-bar"><i style="width:' + pct + '%;' + (freed ? 'left:0;background:var(--pos)' : 'right:0;background:var(--neg)') + '"></i></span>';
     box.appendChild(div);
