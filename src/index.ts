@@ -613,6 +613,60 @@ app.get(
   })
 );
 
+/** Inflow composition: every deposit line in the range grouped by the account
+ * it credits, so income-counted vs non-income inflows can be audited. */
+app.get(
+  '/api/deposit-lines',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const range = validRange(req, res);
+    if (!range) return;
+    const startDate = monthDateRange(range.start).start;
+    const endDate = monthDateRange(range.end).end;
+    const api = await createQboApi();
+    const [deposits, accounts] = [
+      await api.queryByDateRange('Deposit', startDate, endDate),
+      await api.listAccounts(),
+    ];
+    const meta = new Map(accounts.map((a: any) => [String(a.Id), a]));
+    const byAccount = new Map<string, { name: string; type: string; amount: number; lines: number }>();
+    let linkedTxnTotal = 0;
+    let depositTotal = 0;
+    for (const d of deposits) {
+      depositTotal += Number(d.TotalAmt) || 0;
+      for (const line of d.Line || []) {
+        const ref = line.DepositLineDetail?.AccountRef?.value;
+        if (ref) {
+          const acct = meta.get(String(ref));
+          const key = String(ref);
+          const cur = byAccount.get(key) || {
+            name: acct?.Name || `Account ${ref}`,
+            type: acct?.AccountType || 'Unknown',
+            amount: 0,
+            lines: 0,
+          };
+          cur.amount += Number(line.Amount) || 0;
+          cur.lines++;
+          byAccount.set(key, cur);
+        } else if ((line.LinkedTxn || []).length) {
+          linkedTxnTotal += Number(line.Amount) || 0;
+        }
+      }
+    }
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    res.json({
+      start: startDate,
+      end: endDate,
+      depositCount: deposits.length,
+      depositTotal: r2(depositTotal),
+      linkedTxnPortion: r2(linkedTxnTotal),
+      byAccount: [...byAccount.entries()]
+        .map(([id, v]) => ({ id, ...v, amount: r2(v.amount) }))
+        .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount)),
+    });
+  })
+);
+
 app.get(
   '/api/accounts',
   requireAuth,
