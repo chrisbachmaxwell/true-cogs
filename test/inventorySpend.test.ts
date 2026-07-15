@@ -36,7 +36,7 @@ function mockApi(data: {
       if (!bill) throw new Error(`no mock bill ${id}`);
       return bill;
     },
-    async findAccountsByName() {
+    async listAccounts() {
       return [];
     },
   };
@@ -191,6 +191,34 @@ test('bucket 1: discount on a mixed bill spreads pro-rata across charge lines', 
   });
   const r = await computeMonthlySpend(api, MAT_INV, '2026-06');
   assert.equal(r.bucket1Total, 93.33);
+});
+
+test('multiple inventory accounts (11900 + 11901 Boise) both count', async () => {
+  const BOISE = '92';
+  const api = mockApi({
+    bills: {
+      'B8': { Id: 'B8', TotalAmt: 1000, Line: [expenseLine(BOISE, 1000)] },
+    },
+    billPayments: [
+      {
+        Id: 'BP8',
+        TxnDate: '2026-06-20',
+        PayType: 'Check',
+        VendorRef: { name: 'Boise vendor' },
+        Line: [{ Amount: 1000, LinkedTxn: [{ TxnType: 'Bill', TxnId: 'B8' }] }],
+      },
+    ],
+    purchases: [
+      { Id: 'P8', TxnDate: '2026-06-21', PaymentType: 'CreditCard', Line: [expenseLine(MAT_INV, 250)] },
+    ],
+  });
+  const r = await computeMonthlySpend(api, [MAT_INV, BOISE], '2026-06');
+  assert.equal(r.bucket1Total, 1000);
+  assert.equal(r.bucket2Total, 250);
+  assert.equal(r.total, 1250);
+  // Single-id call still works and excludes the other account
+  const single = await computeMonthlySpend(api, MAT_INV, '2026-06');
+  assert.equal(single.total, 250);
 });
 
 test('bucket 2: purchases add, Credit=true purchases subtract', async () => {

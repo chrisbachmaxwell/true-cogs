@@ -12,8 +12,8 @@ export interface QboApi {
   /** Runs `SELECT * FROM <entity> WHERE TxnDate >= start AND TxnDate <= end`, fully paginated. */
   queryByDateRange(entity: EntityName, start: string, end: string): Promise<any[]>;
   getBill(id: string): Promise<any>;
-  findAccountsByName(name: string): Promise<any[]>;
-  getAccount(id: string): Promise<any>;
+  /** Full chart of accounts (paginated). */
+  listAccounts(): Promise<any[]>;
 }
 
 export type EntityName = 'BillPayment' | 'Purchase' | 'Bill' | 'VendorCredit' | 'JournalEntry' | 'Deposit';
@@ -220,19 +220,20 @@ export async function createQboApi(): Promise<QboApi> {
           })
       );
     },
-    findAccountsByName(name: string) {
-      return callFinder(qbo, 'findAccounts', [{ field: 'Name', value: name }]).then(
-        (data) => data?.QueryResponse?.Account || []
-      );
-    },
-    getAccount(id: string) {
-      return withThrottleAndRetry(
-        `getAccount(${id})`,
-        () =>
-          new Promise((resolve, reject) => {
-            qbo.getAccount(id, (err: any, account: any) => (err ? reject(err) : resolve(account)));
-          })
-      );
+    async listAccounts() {
+      const results: any[] = [];
+      let offset = 1;
+      for (;;) {
+        const data = await callFinder(qbo, 'findAccounts', [
+          { field: 'offset', value: offset },
+          { field: 'limit', value: PAGE_SIZE },
+        ]);
+        const page: any[] = data?.QueryResponse?.Account || [];
+        results.push(...page);
+        if (page.length < PAGE_SIZE) break;
+        offset += PAGE_SIZE;
+      }
+      return results;
     },
   };
 }

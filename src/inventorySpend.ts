@@ -61,13 +61,20 @@ export function positiveLineTotal(txn: any): number {
   return sum;
 }
 
-/** Sums Amount over AccountBasedExpenseLineDetail lines coded to the given account. */
-export function inventoryPortionOfLines(txn: any, accountId: string): number {
+/** Accepts one id or several (e.g. Material Inventory #11900 + Boise #11901). */
+export type AccountIds = string | string[];
+
+const toIdSet = (ids: AccountIds): Set<string> =>
+  new Set(Array.isArray(ids) ? ids : [ids]);
+
+/** Sums Amount over AccountBasedExpenseLineDetail lines coded to the given account(s). */
+export function inventoryPortionOfLines(txn: any, accountIds: AccountIds): number {
+  const ids = toIdSet(accountIds);
   let sum = 0;
   for (const line of txn?.Line || []) {
     if (
       line.DetailType === 'AccountBasedExpenseLineDetail' &&
-      line.AccountBasedExpenseLineDetail?.AccountRef?.value === accountId
+      ids.has(line.AccountBasedExpenseLineDetail?.AccountRef?.value)
     ) {
       sum += Number(line.Amount) || 0;
     }
@@ -90,9 +97,11 @@ export function monthDateRange(month: string): { start: string; end: string } {
 
 export async function computeMonthlySpend(
   api: QboApi,
-  inventoryAccountId: string,
+  inventoryAccountIds: AccountIds,
   month: string
 ): Promise<MonthlySpendResult> {
+  const accountIdList = Array.isArray(inventoryAccountIds) ? inventoryAccountIds : [inventoryAccountIds];
+  const accountIdSet = new Set(accountIdList);
   const { start, end } = monthDateRange(month);
   const transactions: SpendTransaction[] = [];
   const warnings: string[] = [];
@@ -132,7 +141,7 @@ export async function computeMonthlySpend(
 
       const bill = await getBill(linkedBill.TxnId);
       const billTotal = Number(bill?.TotalAmt) || 0;
-      const inventoryPortionOfBill = inventoryPortionOfLines(bill, inventoryAccountId);
+      const inventoryPortionOfBill = inventoryPortionOfLines(bill, accountIdList);
       // Denominator is the sum of the bill's charge (positive) lines, not TotalAmt:
       // with vendor-discount lines, TotalAmt is net of the discount and would
       // yield a ratio > 1, over-attributing beyond the cash that actually left.
@@ -170,7 +179,7 @@ export async function computeMonthlySpend(
   let purchaseBooked = 0;
 
   for (const purchase of purchases) {
-    const inventoryPortion = inventoryPortionOfLines(purchase, inventoryAccountId);
+    const inventoryPortion = inventoryPortionOfLines(purchase, accountIdList);
     if (inventoryPortion <= 0) continue;
     const sign = purchase.Credit === true ? -1 : 1;
     const amount = round2(sign * inventoryPortion);
@@ -190,7 +199,7 @@ export async function computeMonthlySpend(
   const bills = await api.queryByDateRange('Bill', start, end);
   let billBooked = 0;
   for (const bill of bills) {
-    billBooked += inventoryPortionOfLines(bill, inventoryAccountId);
+    billBooked += inventoryPortionOfLines(bill, accountIdList);
   }
   const bookedTotal = round2(billBooked + purchaseBooked);
 
@@ -199,7 +208,7 @@ export async function computeMonthlySpend(
     const journalEntries = await api.queryByDateRange('JournalEntry', start, end);
     const jeHits = journalEntries.filter((je) =>
       (je.Line || []).some(
-        (l: any) => l.JournalEntryLineDetail?.AccountRef?.value === inventoryAccountId
+        (l: any) => accountIdSet.has(l.JournalEntryLineDetail?.AccountRef?.value)
       )
     );
     if (jeHits.length) {
@@ -211,7 +220,7 @@ export async function computeMonthlySpend(
     const deposits = await api.queryByDateRange('Deposit', start, end);
     const depHits = deposits.filter((d) =>
       (d.Line || []).some(
-        (l: any) => l.DepositLineDetail?.AccountRef?.value === inventoryAccountId
+        (l: any) => accountIdSet.has(l.DepositLineDetail?.AccountRef?.value)
       )
     );
     if (depHits.length) {

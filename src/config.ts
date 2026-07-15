@@ -6,8 +6,9 @@ export interface AppConfig {
   qboRedirectUri: string | undefined;
   tokenEncryptionKey: string | undefined;
   databaseUrl: string | undefined;
-  /** Chart-of-accounts account name whose spend we track. */
-  inventoryAccountName: string;
+  /** Chart-of-accounts entries whose spend we track — each token matches an
+   * account number (AcctNum) or exact account name, case-insensitive. */
+  inventoryAccounts: string[];
   /** Resend API key for magic-link sign-in emails. Auth is enforced only when set. */
   resendApiKey: string | undefined;
   /** Comma-separated allowlist of emails permitted to sign in. */
@@ -25,7 +26,12 @@ export const config: AppConfig = {
   qboRedirectUri: process.env.QBO_REDIRECT_URI,
   tokenEncryptionKey: process.env.TOKEN_ENCRYPTION_KEY,
   databaseUrl: process.env.DATABASE_URL,
-  inventoryAccountName: process.env.QBO_INVENTORY_ACCOUNT_NAME || 'Material Inventory',
+  inventoryAccounts: (process.env.QBO_INVENTORY_ACCOUNTS ||
+    process.env.QBO_INVENTORY_ACCOUNT_NAME ||
+    'Material Inventory')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
   resendApiKey: process.env.RESEND_API_KEY,
   authAllowedEmails: process.env.AUTH_ALLOWED_EMAILS || 'chrism@pictureline.com',
   authFromEmail: process.env.AUTH_FROM_EMAIL || 'Pictureline Tracker <onboarding@resend.dev>',

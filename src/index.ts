@@ -42,7 +42,7 @@ app.get(
   asyncRoute(async (req, res) => {
     await handleCallback(req.originalUrl);
     // Account id can change between companies/environments — re-resolve on reconnect.
-    await setConfigValue('inventory_account_id', '');
+    await setConfigValue(ACCOUNT_IDS_KEY, '');
     res.redirect('/?connected=1');
   })
 );
@@ -93,21 +93,48 @@ app.get('/auth/logout', (_req, res) => {
 
 app.use(['/api/inventory-spend', '/api/inventory-spend/trend', '/api/status'], requireAuth);
 
-const ACCOUNT_ID_KEY = 'inventory_account_id';
+const ACCOUNT_IDS_KEY = 'inventory_account_ids';
 
-async function getInventoryAccountId(api: QboApi): Promise<string> {
-  const cached = await getConfigValue(ACCOUNT_ID_KEY);
-  if (cached) return cached;
-  const accounts = await api.findAccountsByName(config.inventoryAccountName);
-  if (!accounts.length) {
+/** Resolves each configured token (account number or exact name, case-insensitive)
+ * against the chart of accounts. Result is cached; /callback clears it. */
+async function resolveInventoryAccounts(api: QboApi): Promise<any[]> {
+  const all = await api.listAccounts();
+  const matched: any[] = [];
+  const misses: string[] = [];
+  for (const token of config.inventoryAccounts) {
+    const t = token.toLowerCase();
+    const hit = all.find(
+      (a) =>
+        (a.AcctNum || '').toLowerCase() === t ||
+        (a.Name || '').toLowerCase() === t ||
+        (a.FullyQualifiedName || '').toLowerCase() === t
+    );
+    if (hit) matched.push(hit);
+    else misses.push(token);
+  }
+  if (misses.length) {
+    const candidates = all
+      .filter((a) => /inventory/i.test(a.Name || ''))
+      .map((a) => `${a.AcctNum ? `#${a.AcctNum} ` : ''}${a.Name}`)
+      .join(', ');
     throw new Error(
-      `No account named "${config.inventoryAccountName}" found in the Chart of Accounts`
+      `No chart-of-accounts match for: ${misses.join(', ')}. ` +
+        `Accounts containing "inventory": ${candidates || 'none'}`
     );
   }
-  const account = accounts.find((a) => a.Active !== false) || accounts[0];
-  await setConfigValue(ACCOUNT_ID_KEY, account.Id);
-  console.log(`[qbo] resolved "${config.inventoryAccountName}" account → Id ${account.Id}`);
-  return account.Id;
+  return matched;
+}
+
+async function getInventoryAccountIds(api: QboApi): Promise<string[]> {
+  const cached = await getConfigValue(ACCOUNT_IDS_KEY);
+  if (cached) return cached.split(',');
+  const accounts = await resolveInventoryAccounts(api);
+  const ids = accounts.map((a) => String(a.Id));
+  await setConfigValue(ACCOUNT_IDS_KEY, ids.join(','));
+  console.log(
+    `[qbo] resolved inventory accounts: ${accounts.map((a) => `${a.Name} (#${a.AcctNum || '?'} → Id ${a.Id})`).join(', ')}`
+  );
+  return ids;
 }
 
 function currentMonthUtc(): string {
@@ -133,8 +160,8 @@ async function getMonthlySpend(month: string, forceRefresh: boolean): Promise<Mo
   }
   const promise = (async () => {
     const api = await createQboApi();
-    const accountId = await getInventoryAccountId(api);
-    const result = await computeMonthlySpend(api, accountId, month);
+    const accountIds = await getInventoryAccountIds(api);
+    const result = await computeMonthlySpend(api, accountIds, month);
     await setCachedMonth(month, result);
     return result;
   })().finally(() => inFlightMonths.delete(month));
@@ -189,15 +216,16 @@ app.get(
       // account number can be verified against the books.
       try {
         const api = await createQboApi();
-        const account = await api.getAccount(await getInventoryAccountId(api));
-        status.inventoryAccount = {
-          id: account.Id,
-          name: account.Name,
-          acctNum: account.AcctNum ?? null,
-          fullyQualifiedName: account.FullyQualifiedName,
-          type: account.AccountType,
-          active: account.Active,
-        };
+        const ids = new Set(await getInventoryAccountIds(api));
+        const accounts = (await api.listAccounts()).filter((a) => ids.has(String(a.Id)));
+        status.inventoryAccounts = accounts.map((a) => ({
+          id: a.Id,
+          name: a.Name,
+          acctNum: a.AcctNum ?? null,
+          fullyQualifiedName: a.FullyQualifiedName,
+          type: a.AccountType,
+          active: a.Active,
+        }));
       } catch (err: any) {
         status.inventoryAccountError = err.message;
       }

@@ -193,7 +193,9 @@ async function loadStatus() {
   const s = await res.json();
   $('env').textContent =
     (s.environment === 'production' ? 'QuickBooks · production' : 'QuickBooks · sandbox') +
-    (s.inventoryAccount ? ' · ' + s.inventoryAccount.name + (s.inventoryAccount.acctNum ? ' #' + s.inventoryAccount.acctNum : '') : '');
+    ((s.inventoryAccounts || []).length
+      ? ' · ' + s.inventoryAccounts.map((a) => a.name + (a.acctNum ? ' #' + a.acctNum : '')).join(' + ')
+      : '');
   if (s.missingConfig) {
     showBanner('<strong>Not configured.</strong> Missing env vars: ' + s.missingConfig.join(', '));
     return false;
