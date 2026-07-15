@@ -153,6 +153,32 @@
     </div>
   </div>
 
+  <div class="card chart-card" id="pnlCard">
+    <h2>Cash P&amp;L — <span id="pnlMonth"></span> <span style="color:var(--text-muted);font-weight:400">(cash-backed transactions only, no journal entries)</span></h2>
+    <div class="tiles" style="grid-template-columns:repeat(4,1fr)" id="pnlTiles">
+      <div class="tile">
+        <div class="t-label">Income — customer money in</div>
+        <div class="t-value" id="pnlIncome">—</div>
+        <div class="t-note" id="pnlIncomeNote">Sales receipts + invoice payments − refunds</div>
+      </div>
+      <div class="tile">
+        <div class="t-label">Income — hit the bank</div>
+        <div class="t-value" id="pnlBank">—</div>
+        <div class="t-note" id="pnlBankNote">Deposits into bank accounts</div>
+      </div>
+      <div class="tile">
+        <div class="t-label">Cash COGS</div>
+        <div class="t-value" id="pnlCogs">—</div>
+        <div class="t-note">Both inventory accounts</div>
+      </div>
+      <div class="tile">
+        <div class="t-label">Gross profit</div>
+        <div class="t-value" id="pnlGp">—</div>
+        <div class="t-note" id="pnlGpNote">Customer money in − cash COGS</div>
+      </div>
+    </div>
+  </div>
+
   <div class="card chart-card">
     <h2>Trailing 12 months — actual inventory cash spend</h2>
     <div class="chart-box"><canvas id="trendChart"></canvas></div>
@@ -353,6 +379,30 @@ async function loadMonth(forceRefresh) {
   }
 }
 
+async function loadPnl(forceRefresh) {
+  const month = $('monthPicker').value || defaultMonth();
+  $('pnlMonth').textContent = month;
+  try {
+    const res = await fetch('/api/pnl?month=' + month + (forceRefresh ? '&refresh=1' : ''));
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || res.statusText);
+    $('pnlIncome').textContent = usd.format(d.customerMoneyIn.total);
+    $('pnlIncomeNote').textContent =
+      usd.format(d.customerMoneyIn.salesReceipts) + ' receipts + ' +
+      usd.format(d.customerMoneyIn.invoicePayments) + ' payments − ' +
+      usd.format(d.customerMoneyIn.refunds) + ' refunds';
+    $('pnlBank').textContent = usd.format(d.bankInflows.total);
+    $('pnlBankNote').textContent = d.counts.deposits + ' deposits; differs by settlement timing';
+    $('pnlCogs').textContent = usd.format(d.cogs);
+    $('pnlGp').textContent = usd.format(d.grossProfit);
+    $('pnlGpNote').textContent = d.grossMarginPct !== null
+      ? d.grossMarginPct.toFixed(1) + '% margin · bank-basis GP ' + usd.format(d.grossProfitBankBasis)
+      : 'Customer money in − cash COGS';
+  } catch (err) {
+    $('pnlGpNote').textContent = 'P&L error: ' + err.message;
+  }
+}
+
 async function loadTrend() {
   try {
     const res = await fetch('/api/inventory-spend/trend?months=12' + acctQuery());
@@ -366,11 +416,12 @@ async function loadTrend() {
 
 async function init() {
   $('monthPicker').value = defaultMonth();
-  $('monthPicker').addEventListener('change', () => loadMonth(false));
-  $('refreshBtn').addEventListener('click', () => { loadMonth(true); loadTrend(); });
+  $('monthPicker').addEventListener('change', () => { loadMonth(false); loadPnl(false); });
+  $('refreshBtn').addEventListener('click', () => { loadMonth(true); loadPnl(true); loadTrend(); });
   const ok = await loadStatus();
   if (!ok) return;
   await loadMonth(false);
+  loadPnl(false);
   loadTrend();
 }
 init();

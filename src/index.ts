@@ -4,6 +4,7 @@ import { config, missingQboConfig } from './config';
 import { initDb, getConfigValue, setConfigValue, getCachedMonth, setCachedMonth } from './db';
 import { buildAuthUri, handleCallback, createQboApi, connectionStatus, QboApi } from './qbo';
 import { computeMonthlySpend, MonthlySpendResult } from './inventorySpend';
+import { computeMonthlyPnl, MonthlyPnl } from './pnl';
 import {
   authConfigured,
   requireAuth,
@@ -43,6 +44,7 @@ app.get(
     await handleCallback(req.originalUrl);
     // Account id can change between companies/environments — re-resolve on reconnect.
     await setConfigValue(ACCOUNTS_KEY, '');
+    await setConfigValue('bank_accounts_json', '');
     res.redirect('/?connected=1');
   })
 );
@@ -91,7 +93,7 @@ app.get('/auth/logout', (_req, res) => {
   res.redirect('/login');
 });
 
-app.use(['/api/inventory-spend', '/api/inventory-spend/trend', '/api/status'], requireAuth);
+app.use(['/api/inventory-spend', '/api/inventory-spend/trend', '/api/pnl', '/api/status'], requireAuth);
 
 const ACCOUNTS_KEY = 'inventory_accounts_json';
 
@@ -249,6 +251,59 @@ app.get(
       });
     }
     res.json({ months: list });
+  })
+);
+
+const BANK_ACCOUNTS_KEY = 'bank_accounts_json';
+
+/** All Bank-type accounts from the chart of accounts, cached like the
+ * inventory accounts. Cleared on /callback. */
+async function getBankAccounts(api?: QboApi): Promise<TrackedAccount[]> {
+  const cached = await getConfigValue(BANK_ACCOUNTS_KEY);
+  if (cached) return JSON.parse(cached) as TrackedAccount[];
+  const all = await (api ?? (await createQboApi())).listAccounts();
+  const banks: TrackedAccount[] = all
+    .filter((a) => a.AccountType === 'Bank')
+    .map((a) => ({ id: String(a.Id), acctNum: a.AcctNum ?? null, name: a.Name }));
+  await setConfigValue(BANK_ACCOUNTS_KEY, JSON.stringify(banks));
+  console.log(`[qbo] bank accounts: ${banks.map((b) => `${b.name} (#${b.acctNum || '?'})`).join(', ') || 'none'}`);
+  return banks;
+}
+
+const inFlightPnl = new Map<string, Promise<MonthlyPnl>>();
+
+async function getMonthlyPnl(month: string, forceRefresh: boolean): Promise<MonthlyPnl> {
+  const cacheKey = `pnl:${month}`;
+  if (!forceRefresh) {
+    const cached = await getCachedMonth(cacheKey);
+    if (cached) {
+      const isClosedMonth = month < currentMonthUtc();
+      const fresh = Date.now() - new Date(cached.computedAt).getTime() < CURRENT_MONTH_CACHE_TTL_MS;
+      if (isClosedMonth || fresh) return cached.data as MonthlyPnl;
+    }
+    const inFlight = inFlightPnl.get(cacheKey);
+    if (inFlight) return inFlight;
+  }
+  const promise = (async () => {
+    const spend = await getMonthlySpend(month, forceRefresh); // combined accounts, cached
+    const api = await createQboApi();
+    const banks = await getBankAccounts(api);
+    const result = await computeMonthlyPnl(api, banks.map((b) => b.id), month, spend.total);
+    await setCachedMonth(cacheKey, result);
+    return result;
+  })().finally(() => inFlightPnl.delete(cacheKey));
+  inFlightPnl.set(cacheKey, promise);
+  return promise;
+}
+
+app.get(
+  '/api/pnl',
+  asyncRoute(async (req, res) => {
+    const month = String(req.query.month || '');
+    if (!/^\d{4}-\d{2}$/.test(month)) {
+      return res.status(400).json({ error: 'Provide ?month=YYYY-MM' });
+    }
+    res.json(await getMonthlyPnl(month, req.query.refresh === '1'));
   })
 );
 

@@ -16,7 +16,16 @@ export interface QboApi {
   listAccounts(): Promise<any[]>;
 }
 
-export type EntityName = 'BillPayment' | 'Purchase' | 'Bill' | 'VendorCredit' | 'JournalEntry' | 'Deposit';
+export type EntityName =
+  | 'BillPayment'
+  | 'Purchase'
+  | 'Bill'
+  | 'VendorCredit'
+  | 'JournalEntry'
+  | 'Deposit'
+  | 'SalesReceipt'
+  | 'Payment'
+  | 'RefundReceipt';
 
 const FINDER_BY_ENTITY: Record<EntityName, string> = {
   BillPayment: 'findBillPayments',
@@ -25,6 +34,9 @@ const FINDER_BY_ENTITY: Record<EntityName, string> = {
   VendorCredit: 'findVendorCredits',
   JournalEntry: 'findJournalEntries',
   Deposit: 'findDeposits',
+  SalesReceipt: 'findSalesReceipts',
+  Payment: 'findPayments',
+  RefundReceipt: 'findRefundReceipts',
 };
 
 function oauthClient(): any {
