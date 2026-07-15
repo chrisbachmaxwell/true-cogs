@@ -5,6 +5,8 @@ import { initDb, getConfigValue, setConfigValue, getCachedMonth, setCachedMonth 
 import { buildAuthUri, handleCallback, createQboApi, connectionStatus, QboApi } from './qbo';
 import { computeMonthlySpend, MonthlySpendResult } from './inventorySpend';
 import { computeMonthlyPnl, MonthlyPnl } from './pnl';
+import { computeCashFlow } from './cashflow';
+import { monthDateRange } from './inventorySpend';
 import {
   authConfigured,
   requireAuth,
@@ -393,6 +395,114 @@ function flattenReportRows(rows: any, out: { name: string; id: string | null; va
   }
   return out;
 }
+
+function monthsBetween(start: string, end: string): string[] {
+  const list: string[] = [];
+  let [y, m] = start.split('-').map(Number);
+  const [ey, em] = end.split('-').map(Number);
+  while (y < ey || (y === ey && m <= em)) {
+    list.push(`${y}-${String(m).padStart(2, '0')}`);
+    m++;
+    if (m > 12) { m = 1; y++; }
+  }
+  return list;
+}
+
+function validRange(req: Request, res: Response): { start: string; end: string; months: string[] } | null {
+  const start = String(req.query.start || '');
+  const end = String(req.query.end || '');
+  if (!/^\d{4}-\d{2}$/.test(start) || !/^\d{4}-\d{2}$/.test(end) || start > end) {
+    res.status(400).json({ error: 'Provide ?start=YYYY-MM&end=YYYY-MM with start <= end' });
+    return null;
+  }
+  const months = monthsBetween(start, end);
+  if (months.length > 24) {
+    res.status(400).json({ error: 'Range too large (max 24 months)' });
+    return null;
+  }
+  return { start, end, months };
+}
+
+/** Aggregated P&L + spend over a month range, driven by the monthly caches. */
+app.get(
+  '/api/summary',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const range = validRange(req, res);
+    if (!range) return;
+    const months = [];
+    const totals = {
+      income: 0, incomeDeposits: 0, incomeInvoicePayments: 0, incomeReceipts: 0, incomeRefunds: 0,
+      bankInflows: 0, cogs: 0, grossProfit: 0, bookedCogs: 0, vendorCreditsApplied: 0,
+    };
+    const warnings: string[] = [];
+    for (const month of range.months) {
+      const [pnl, spend] = [await getMonthlyPnl(month, false), await getMonthlySpend(month, false)];
+      months.push({
+        month,
+        income: pnl.retailCashIn.total,
+        bankInflows: pnl.bankInflows.total,
+        cogs: pnl.cogs,
+        grossProfit: pnl.grossProfit,
+        margin: pnl.grossMarginPct,
+        booked: spend.bookedTotal,
+      });
+      totals.income += pnl.retailCashIn.total;
+      totals.incomeDeposits += pnl.retailCashIn.deposits;
+      totals.incomeInvoicePayments += pnl.retailCashIn.invoicePayments;
+      totals.incomeReceipts += pnl.retailCashIn.salesReceipts;
+      totals.incomeRefunds += pnl.retailCashIn.refunds;
+      totals.bankInflows += pnl.bankInflows.total;
+      totals.cogs += pnl.cogs;
+      totals.grossProfit += pnl.grossProfit;
+      totals.bookedCogs += spend.bookedTotal;
+      totals.vendorCreditsApplied += spend.vendorCreditsApplied;
+      warnings.push(...pnl.warnings.map((w) => `${month}: ${w}`), ...spend.warnings.map((w) => `${month}: ${w}`));
+    }
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    for (const k of Object.keys(totals) as (keyof typeof totals)[]) totals[k] = r2(totals[k]);
+    res.json({
+      start: range.start,
+      end: range.end,
+      totals: {
+        ...totals,
+        grossMarginPct: totals.income > 0 ? r2((totals.grossProfit / totals.income) * 100) : null,
+      },
+      months,
+      warnings,
+    });
+  })
+);
+
+const dayBefore = (isoDate: string) => {
+  const d = new Date(`${isoDate}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+};
+
+/** Balance-sheet diff over the range: bank change + where the cash went. */
+app.get(
+  '/api/cash-flow',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const range = validRange(req, res);
+    if (!range) return;
+    const asOfStart = dayBefore(monthDateRange(range.start).start);
+    const asOfEnd = monthDateRange(range.end).end;
+    const cacheKey = `cf:${asOfStart}:${asOfEnd}`;
+    if (req.query.refresh !== '1') {
+      const cached = await getCachedMonth(cacheKey);
+      const endIsClosed = range.end < currentMonthUtc();
+      if (cached && (endIsClosed || Date.now() - new Date(cached.computedAt).getTime() < CURRENT_MONTH_CACHE_TTL_MS)) {
+        return res.json(cached.data);
+      }
+    }
+    const api = await createQboApi();
+    const result = await computeCashFlow(api, asOfStart, asOfEnd);
+    await setCachedMonth(cacheKey, result);
+    res.json(result);
+  })
+);
 
 app.get(
   '/api/accounts',

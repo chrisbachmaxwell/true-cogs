@@ -110,8 +110,21 @@ export async function computeMonthlyPnl(
   const toBank = (t: any) => bankIds.has(t.DepositToAccountRef?.value);
 
   // ---- Retail cash in ----
+  // Income lines only count when the deposit actually landed in a Bank-type
+  // account — a deposit routed elsewhere never increased the bank.
   let depositRetail = 0;
-  for (const d of deposits) depositRetail += depositRetailPortion(d, retailIds);
+  let nonBankIncomeDeposits = 0;
+  for (const d of deposits) {
+    const portion = depositRetailPortion(d, retailIds);
+    if (portion === 0) continue;
+    if (toBank(d)) depositRetail += portion;
+    else nonBankIncomeDeposits += portion;
+  }
+  if (nonBankIncomeDeposits > 0) {
+    warnings.push(
+      `$${nonBankIncomeDeposits.toFixed(2)} of income-coded deposit lines went to non-bank accounts — excluded from income.`
+    );
+  }
 
   let srRetail = 0;
   for (const sr of salesReceipts) srRetail += itemRetailPortion(sr, retailIds, ctx.itemIncomeAccount);
