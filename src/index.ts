@@ -346,6 +346,24 @@ async function getItemIncomeMap(api: QboApi): Promise<Map<string, string>> {
   return map;
 }
 
+const DIRECT_COST_KEY = 'direct_cost_accounts_json';
+
+/** Direct-cost accounts (freight, repairs, materials) added to COGS. */
+async function getDirectCostAccounts(api: QboApi): Promise<TrackedAccount[]> {
+  const cached = readAccountCache(await getConfigValue(DIRECT_COST_KEY), config.directCostAccounts);
+  if (cached) return cached;
+  let tracked: TrackedAccount[] = [];
+  try {
+    const resolved = await resolveAccounts(api, config.directCostAccounts, /freight|repair|material/i);
+    tracked = resolved.map((a) => ({ id: String(a.Id), acctNum: a.AcctNum ?? null, name: a.Name }));
+  } catch (err: any) {
+    console.warn('[qbo] direct-cost account resolution failed:', err.message);
+    return [];
+  }
+  await setConfigValue(DIRECT_COST_KEY, JSON.stringify({ tokens: config.directCostAccounts, accounts: tracked }));
+  return tracked;
+}
+
 const TAX_ACCOUNTS_KEY = 'sales_tax_accounts_json';
 
 /** Sales-tax liability account(s), e.g. #21900. Resolution failure downgrades
@@ -407,6 +425,10 @@ async function getMonthlyPnl(month: string, forceRefresh: boolean): Promise<Mont
     const spend = await getMonthlySpend(month, forceRefresh); // combined accounts, cached
     const api = await getComputeApi();
     const tax = await getSalesTaxRemitted(api, month);
+    const directIds = (await getDirectCostAccounts(api)).map((t) => t.id);
+    const directCosts = directIds.length
+      ? (await computeMonthlySpend(api, directIds, month)).total
+      : 0;
     const result = await computeMonthlyPnl(
       api,
       {
@@ -418,7 +440,8 @@ async function getMonthlyPnl(month: string, forceRefresh: boolean): Promise<Mont
       },
       month,
       spend.total,
-      tax.amount
+      tax.amount,
+      directCosts
     );
     if (tax.source === 'balance-sheet') {
       result.warnings.push(
@@ -495,7 +518,7 @@ app.get(
     const months = [];
     const totals = {
       income: 0, incomeDeposits: 0, incomeInvoicePayments: 0, incomeReceipts: 0, incomeRefunds: 0,
-      salesTaxRemitted: 0, revenueNet: 0, cogsOffsets: 0, expenseOffsets: 0,
+      salesTaxRemitted: 0, revenueNet: 0, cogsOffsets: 0, expenseOffsets: 0, directCosts: 0,
       bankInflows: 0, cogs: 0, grossProfit: 0, bookedCogs: 0, vendorCreditsApplied: 0,
     };
     const warnings: string[] = [];
@@ -515,6 +538,7 @@ app.get(
       totals.revenueNet += pnl.revenueNet ?? pnl.retailCashIn.total;
       totals.cogsOffsets += pnl.cogsOffsets ?? 0;
       totals.expenseOffsets += pnl.expenseOffsets ?? 0;
+      totals.directCosts += pnl.directCosts ?? 0;
       totals.incomeDeposits += pnl.retailCashIn.deposits;
       totals.incomeInvoicePayments += pnl.retailCashIn.invoicePayments;
       totals.incomeReceipts += pnl.retailCashIn.salesReceipts;

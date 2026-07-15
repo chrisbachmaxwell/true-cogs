@@ -11,6 +11,9 @@ export interface AppConfig {
   inventoryAccounts: string[];
   /** Income accounts counted as retail sales for the cash P&L (same matching). */
   retailIncomeAccounts: string[];
+  /** Direct-cost accounts (freight, customer repairs, materials) whose cash
+   * payments are added to COGS. */
+  directCostAccounts: string[];
   /** Sales-tax liability account(s): remittances to them are deducted from
    * revenue, because the POS sync books tax-inclusive amounts into income. */
   salesTaxAccounts: string[];
@@ -38,6 +41,10 @@ export const config: AppConfig = {
     .map((s) => s.trim())
     .filter(Boolean),
   retailIncomeAccounts: (process.env.QBO_RETAIL_INCOME_ACCOUNTS || '40100')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
+  directCostAccounts: (process.env.QBO_DIRECT_COST_ACCOUNTS || '51300,50600,50200')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean),

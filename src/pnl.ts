@@ -38,6 +38,9 @@ export interface MonthlyPnl {
     directInvoicePayments: number;
     total: number;
   };
+  /** Cash paid to direct-cost accounts (freight, customer repairs, materials).
+   * Added to COGS in the gross-profit math. */
+  directCosts: number;
   /** Deposited money-back from vendors, coded to COGS-type accounts (refunds,
    * rebates). Reduces COGS in the gross-profit math. */
   cogsOffsets: number;
@@ -106,7 +109,8 @@ export async function computeMonthlyPnl(
   ctx: PnlContext,
   month: string,
   cogs: number,
-  salesTaxRemitted = 0
+  salesTaxRemitted = 0,
+  directCosts = 0
 ): Promise<MonthlyPnl> {
   const { start, end } = monthDateRange(month);
   const bankIds = new Set(ctx.bankAccountIds);
@@ -197,15 +201,19 @@ export async function computeMonthlyPnl(
       directInvoicePayments: round2(directPay),
       total: bankTotal,
     },
+    directCosts: round2(directCosts),
     cogsOffsets: round2(cogsOffsets),
     expenseOffsets: round2(expenseOffsets),
     salesTaxRemitted: round2(salesTaxRemitted),
     revenueNet: round2(retailTotal - salesTaxRemitted),
     cogs: round2(cogs),
-    grossProfit: round2(retailTotal - salesTaxRemitted - cogs + cogsOffsets),
+    grossProfit: round2(retailTotal - salesTaxRemitted - cogs - directCosts + cogsOffsets),
     grossMarginPct:
       retailTotal - salesTaxRemitted > 0
-        ? round2(((retailTotal - salesTaxRemitted - cogs + cogsOffsets) / (retailTotal - salesTaxRemitted)) * 100)
+        ? round2(
+            ((retailTotal - salesTaxRemitted - cogs - directCosts + cogsOffsets) /
+              (retailTotal - salesTaxRemitted)) * 100
+          )
         : null,
     grossProfitBankBasis: round2(bankTotal - cogs),
     counts: {
