@@ -1436,7 +1436,20 @@ app.post(
         await upsertTxns('Purchase', [saved]); // keep the mirror truthful immediately
         results.push({ txnId: row.txnId, status: 'reclassified', amount: plan.moving });
       } catch (err: any) {
-        results.push({ txnId: row.txnId, status: 'error', reason: err.message?.slice(0, 200) });
+        // A deleted transaction (e.g. one Chris already removed by hand in the
+        // earlier delete-and-match workflow) can never be reclassified — retire
+        // it from the belt so batches don't retry it forever.
+        if (/Object Not Found/i.test(err.message || '') && !dryRun) {
+          await getPool().query(
+            `INSERT INTO reclassify_log (txn_id, before, after, moved)
+             VALUES ($1, $2, $3, 0)
+             ON CONFLICT (txn_id) DO NOTHING`,
+            [row.txnId, JSON.stringify({ missing: true }), JSON.stringify({})]
+          );
+          results.push({ txnId: row.txnId, status: 'gone', reason: 'already deleted in QuickBooks — retired from the belt' });
+        } else {
+          results.push({ txnId: row.txnId, status: 'error', reason: err.message?.slice(0, 200) });
+        }
       }
     }
     const ok = results.filter((r) => r.status === 'reclassified' || r.status === 'would-reclassify');
