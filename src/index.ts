@@ -1418,6 +1418,17 @@ app.post(
         const live = await api.getPurchase!(row.txnId);
         const plan = planReclassify(live, await reclassifyCfg(api, row.expectedAmount));
         if (!plan.ok) {
+          // Rows Chris already reclassified by hand on the conveyor are done —
+          // retire them so the pending count reaches zero.
+          if (plan.reason === 'already reclassified' && !dryRun) {
+            await getPool().query(
+              `INSERT INTO reclassify_log (txn_id, before, after, moved)
+               VALUES ($1, $2, $3, 0) ON CONFLICT (txn_id) DO NOTHING`,
+              [row.txnId, JSON.stringify({ doneByHand: true }), JSON.stringify(live)]
+            );
+            results.push({ txnId: row.txnId, status: 'gone', reason: 'already reclassified by hand — retired from the belt' });
+            continue;
+          }
           results.push({ txnId: row.txnId, status: 'skipped', reason: plan.reason });
           continue;
         }
