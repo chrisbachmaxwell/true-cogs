@@ -4,8 +4,9 @@ import { planReclassify, planRevert } from '../src/reclassify';
 
 const CFG = {
   zionsId: 'zions',
-  achId: 'ach',
-  inventoryIds: new Set(['inv1', 'inv2']),
+  toId: 'ach',
+  toName: 'ACH',
+  fromIds: new Set(['inv1', 'inv2']),
   expectedAmount: 500,
 };
 
@@ -58,13 +59,13 @@ test('refuses: wrong funding account (the Amex case Chris caught)', () => {
   assert.match(p.reason, /not paid from Zions/);
 });
 
-test('refuses: no inventory-coded lines (the employee-loan case Chris caught)', () => {
+test('refuses: no source-coded lines (the employee-loan case Chris caught)', () => {
   const p = planReclassify(
     purchase({ Line: [{ DetailType: 'AccountBasedExpenseLineDetail', Amount: 500, AccountBasedExpenseLineDetail: { AccountRef: { value: 'loan' } } }] }),
     CFG
   );
   assert.equal(p.ok, false);
-  assert.match(p.reason, /no inventory-coded lines/);
+  assert.match(p.reason, /no lines coded to the expected source account/);
 });
 
 test('refuses: amount drifted from the manifest expectation', () => {

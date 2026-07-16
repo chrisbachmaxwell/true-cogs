@@ -8,13 +8,14 @@
 // time; anything failing any check is skipped, never written.
 
 export interface ReclassifyConfig {
-  /** The real bank the wires came from (Zions checking). */
+  /** The real bank the pulls/wires came from (Zions checking). */
   zionsId: string;
-  /** The clearing account the lines move to. */
-  achId: string;
-  /** Inventory accounts the duplicate lines are currently coded to. */
-  inventoryIds: Set<string>;
-  /** The inventory-coded amount the manifest expects on this transaction. */
+  /** The account the matching lines move TO. */
+  toId: string;
+  toName: string;
+  /** Accounts the lines are currently coded to (moved FROM). */
+  fromIds: Set<string>;
+  /** The from-coded amount the manifest expects on this transaction. */
   expectedAmount: number;
 }
 
@@ -43,17 +44,17 @@ export function planReclassify(purchase: any, cfg: ReclassifyConfig): Reclassify
   const lines = (purchase.Line || []).filter(
     (l: any) =>
       l.DetailType === 'AccountBasedExpenseLineDetail' &&
-      cfg.inventoryIds.has(String(l.AccountBasedExpenseLineDetail?.AccountRef?.value))
+      cfg.fromIds.has(String(l.AccountBasedExpenseLineDetail?.AccountRef?.value))
   );
   const alreadyDone = (purchase.Line || []).some(
     (l: any) =>
       l.DetailType === 'AccountBasedExpenseLineDetail' &&
-      String(l.AccountBasedExpenseLineDetail?.AccountRef?.value) === String(cfg.achId)
+      String(l.AccountBasedExpenseLineDetail?.AccountRef?.value) === String(cfg.toId)
   );
   if (!lines.length) {
     return alreadyDone
       ? { ok: false, reason: 'already reclassified' }
-      : { ok: false, reason: 'no inventory-coded lines' };
+      : { ok: false, reason: 'no lines coded to the expected source account' };
   }
   const moving = round2(lines.reduce((s: number, l: any) => s + (Number(l.Amount) || 0), 0));
   if (Math.abs(moving - cfg.expectedAmount) > 0.02) {
@@ -62,14 +63,14 @@ export function planReclassify(purchase: any, cfg: ReclassifyConfig): Reclassify
       reason: `inventory lines total $${moving.toFixed(2)} but manifest expects $${cfg.expectedAmount.toFixed(2)} — transaction changed since matching`,
     };
   }
-  // Deep-copy, then re-point ONLY the inventory lines at the clearing account.
+  // Deep-copy, then re-point ONLY the matching lines at the target account.
   const updated = JSON.parse(JSON.stringify(purchase));
   for (const l of updated.Line || []) {
     if (
       l.DetailType === 'AccountBasedExpenseLineDetail' &&
-      cfg.inventoryIds.has(String(l.AccountBasedExpenseLineDetail?.AccountRef?.value))
+      cfg.fromIds.has(String(l.AccountBasedExpenseLineDetail?.AccountRef?.value))
     ) {
-      l.AccountBasedExpenseLineDetail.AccountRef = { value: String(cfg.achId), name: 'ACH' };
+      l.AccountBasedExpenseLineDetail.AccountRef = { value: String(cfg.toId), name: cfg.toName };
     }
   }
   return { ok: true, reason: 'ok', updated, moving };

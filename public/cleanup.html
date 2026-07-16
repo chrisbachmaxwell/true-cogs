@@ -36,6 +36,10 @@
     <h2>Run</h2>
     <p style="color:var(--ink-2);font-size:14px">Start with a dry run (checks everything, writes nothing). Then reclassify a small batch and spot-check a couple in QuickBooks before running big batches. Skipped rows are never written — they're listed with the reason.</p>
     <div class="btnrow">
+      <select id="task" style="font:inherit;font-size:14px;padding:8px;border-radius:9px;border:1px solid var(--hairline)">
+        <option value="ach-belt">ACH duplicates → ACH clearing</option>
+        <option value="tax-pulls-2023">2023 tax pulls (66000) → tax liabilities</option>
+      </select>
       <button class="btn" id="bDry">Dry run next 25</button>
       <button class="btn primary" id="bRun25">Reclassify next 25</button>
       <button class="btn primary" id="bRun100">Reclassify next 100</button>
@@ -55,9 +59,10 @@
 <script src="/app.js"></script>
 <script>
 let busy=false;
+function task(){return $('task').value;}
 async function status(){
   try{
-    const d=await jfetch('/api/reclassify/status');
+    const d=await jfetch('/api/reclassify/status?task='+encodeURIComponent(task()));
     $('kPend').textContent=d.pending;
     $('kPendAmt').textContent=usd2.format(d.pendingAmount)+' still to move';
     $('kDone').textContent=d.done+' of '+d.beltTotal;
@@ -80,7 +85,7 @@ function show(rows){
 async function run(limit,dry){
   if(busy)return; busy=true; setLoading(true);
   try{
-    const res=await fetch('/api/reclassify/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({limit:limit,dryRun:dry})});
+    const res=await fetch('/api/reclassify/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({limit:limit,dryRun:dry,task:task()})});
     const d=await res.json();
     if(!res.ok){showBanner('<strong>Error.</strong> '+escapeHtml(d.error||'')); return;}
     showBanner((dry?'<strong>Dry run:</strong> ':'<strong>Done:</strong> ')+d.succeeded+' of '+d.attempted+' · '+usd2.format(d.amount));
@@ -88,6 +93,7 @@ async function run(limit,dry){
   }catch(e){showBanner('<strong>Error.</strong> '+escapeHtml(e.message));}
   finally{busy=false; setLoading(false);}
 }
+$('task').addEventListener('change',()=>{$('res').style.display='none';status();});
 $('bDry').addEventListener('click',()=>run(25,true));
 $('bRun25').addEventListener('click',()=>run(25,false));
 $('bRun100').addEventListener('click',()=>run(100,false));

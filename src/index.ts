@@ -1355,29 +1355,51 @@ app.get(
 interface BeltRow {
   txnId: string;
   expectedAmount: number;
-  pairedVendor: string;
-  pairedDate: string;
-  pairedTotal: number;
+  /** Per-row target account token (manifest tasks); ach-belt rows omit it. */
+  to?: string;
 }
 
-function loadBelt(): BeltRow[] {
-  const p = path.join(__dirname, '..', 'cleanup', 'ach-belt.json');
+/** Each cleanup task Chris has explicitly approved gets an entry here; the
+ * endpoints refuse any unknown task name. */
+const CLEANUP_TASKS: Record<string, { file: string; from: 'inventory' | string; defaultTo?: string }> = {
+  'ach-belt': { file: 'ach-belt.json', from: 'inventory', defaultTo: 'ACH' },
+  'tax-pulls-2023': { file: 'tax-pulls-2023.json', from: '66000 Payroll Expenses' },
+};
+
+function loadBelt(task: string): BeltRow[] {
+  const t = CLEANUP_TASKS[task];
+  if (!t) throw Object.assign(new Error(`Unknown cleanup task "${task}"`), { statusCode: 400 });
+  const p = path.join(__dirname, '..', 'cleanup', t.file);
   return (JSON.parse(fs.readFileSync(p, 'utf8')).rows as BeltRow[]) || [];
 }
 
-async function reclassifyCfg(api: QboApi, expectedAmount: number) {
-  const inventoryIds = new Set((await getTrackedAccounts(api)).map((t) => t.id));
-  const ach = await resolveAccounts(api, ['ACH'], /ach|clearing/i);
-  const zions = await resolveAccounts(api, ['Zions Bank Checking (8882)'], /zions/i);
-  return { zionsId: String(zions[0].Id), achId: String(ach[0].Id), inventoryIds, expectedAmount };
+const accountTokenCache = new Map<string, { id: string; name: string }>();
+async function resolveToken(api: QboApi, token: string): Promise<{ id: string; name: string }> {
+  const hit = accountTokenCache.get(token);
+  if (hit) return hit;
+  const [a] = await resolveAccounts(api, [token], /./);
+  const out = { id: String(a.Id), name: a.Name as string };
+  accountTokenCache.set(token, out);
+  return out;
+}
+
+async function reclassifyCfg(api: QboApi, task: string, row: BeltRow) {
+  const spec = CLEANUP_TASKS[task];
+  const fromIds =
+    spec.from === 'inventory'
+      ? new Set((await getTrackedAccounts(api)).map((t) => t.id))
+      : new Set([(await resolveToken(api, spec.from)).id]);
+  const to = await resolveToken(api, row.to ?? spec.defaultTo!);
+  const zions = await resolveToken(api, 'Zions Bank Checking (8882)');
+  return { zionsId: zions.id, toId: to.id, toName: to.name, fromIds, expectedAmount: row.expectedAmount };
 }
 
 app.get(
   '/api/reclassify/status',
   requireAuth,
   requireAdmin,
-  asyncRoute(async (_req, res) => {
-    const belt = loadBelt();
+  asyncRoute(async (req, res) => {
+    const belt = loadBelt(String(req.query.task || 'ach-belt'));
     const log = await getPool().query(
       `SELECT txn_id, moved, reclassified_at, reverted_at FROM reclassify_log`
     );
@@ -1407,7 +1429,8 @@ app.post(
   asyncRoute(async (req, res) => {
     const limit = Math.min(Math.max(parseInt(String(req.body?.limit ?? '25'), 10) || 25, 1), 100);
     const dryRun = req.body?.dryRun === true;
-    const belt = loadBelt();
+    const task = String(req.body?.task || 'ach-belt');
+    const belt = loadBelt(task);
     const log = await getPool().query(`SELECT txn_id FROM reclassify_log WHERE reverted_at IS NULL`);
     const done = new Set(log.rows.map((r) => r.txn_id));
     const batch = belt.filter((r) => !done.has(r.txnId)).slice(0, limit);
@@ -1416,7 +1439,7 @@ app.post(
     for (const row of batch) {
       try {
         const live = await api.getPurchase!(row.txnId);
-        const plan = planReclassify(live, await reclassifyCfg(api, row.expectedAmount));
+        const plan = planReclassify(live, await reclassifyCfg(api, task, row));
         if (!plan.ok) {
           // Rows Chris already reclassified by hand on the conveyor are done —
           // retire them so the pending count reaches zero.
