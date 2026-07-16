@@ -15,6 +15,11 @@ export interface QboApi {
   queryChangedSince?(entity: EntityName, sinceIso: string): Promise<any[]>;
   getBill(id: string): Promise<any>;
   getInvoice(id: string): Promise<any>;
+  /** Fetch a Purchase with its current SyncToken (write flows need it fresh). */
+  getPurchase?(id: string): Promise<any>;
+  /** THE ONLY WRITE in this app: full-object Purchase update, used solely by
+   * the admin-gated ACH-cleanup reclassify flow Chris approved 2026-07-16. */
+  updatePurchase?(purchase: any): Promise<any>;
   /** Full chart of accounts (paginated). */
   listAccounts(): Promise<any[]>;
   /** Full item list (paginated) — for mapping sale lines to income accounts. */
@@ -270,6 +275,24 @@ export async function createQboApi(): Promise<QboApi> {
         () =>
           new Promise((resolve, reject) => {
             qbo.getInvoice(id, (err: any, inv: any) => (err ? reject(err) : resolve(inv)));
+          })
+      );
+    },
+    getPurchase(id: string) {
+      return withThrottleAndRetry(
+        `getPurchase(${id})`,
+        () =>
+          new Promise((resolve, reject) => {
+            qbo.getPurchase(id, (err: any, p: any) => (err ? reject(err) : resolve(p)));
+          })
+      );
+    },
+    updatePurchase(purchase: any) {
+      return withThrottleAndRetry(
+        `updatePurchase(${purchase?.Id})`,
+        () =>
+          new Promise((resolve, reject) => {
+            qbo.updatePurchase(purchase, (err: any, p: any) => (err ? reject(err) : resolve(p)));
           })
       );
     },

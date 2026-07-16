@@ -7,7 +7,9 @@ import { computeMonthlySpend, MonthlySpendResult, SpendOptions } from './invento
 import { computeMonthlyPnl, MonthlyPnl, PnlContext } from './pnl';
 import { computePnlDetail, expenseAccountDetail, DetailRow } from './pnlDetail';
 import { computeCashFlow, reportBalances } from './cashflow';
-import { runSync, syncIfStale, syncStatus, isStoreFresh, makeLocalApi } from './sync';
+import { runSync, syncIfStale, syncStatus, isStoreFresh, makeLocalApi, upsertTxns } from './sync';
+import { planReclassify, planRevert } from './reclassify';
+import fs from 'fs';
 import { computeBankFlow } from './bankflow';
 import { monthDateRange } from './inventorySpend';
 import {
@@ -1345,6 +1347,137 @@ app.get(
   })
 );
 
+// ---- ACH-cleanup reclassify (the app's ONLY write path; Chris-approved 2026-07-16) ----
+// Admin-gated end to end: the agent/service account cannot reach these routes.
+// Every run re-validates each transaction against LIVE QuickBooks; failures
+// are skipped and reported, and every write stores a before-image for revert.
+
+interface BeltRow {
+  txnId: string;
+  expectedAmount: number;
+  pairedVendor: string;
+  pairedDate: string;
+  pairedTotal: number;
+}
+
+function loadBelt(): BeltRow[] {
+  const p = path.join(__dirname, '..', 'cleanup', 'ach-belt.json');
+  return (JSON.parse(fs.readFileSync(p, 'utf8')).rows as BeltRow[]) || [];
+}
+
+async function reclassifyCfg(api: QboApi, expectedAmount: number) {
+  const inventoryIds = new Set((await getTrackedAccounts(api)).map((t) => t.id));
+  const ach = await resolveAccounts(api, ['ACH'], /ach|clearing/i);
+  const zions = await resolveAccounts(api, ['Zions Bank Checking (8882)'], /zions/i);
+  return { zionsId: String(zions[0].Id), achId: String(ach[0].Id), inventoryIds, expectedAmount };
+}
+
+app.get(
+  '/api/reclassify/status',
+  requireAuth,
+  requireAdmin,
+  asyncRoute(async (_req, res) => {
+    const belt = loadBelt();
+    const log = await getPool().query(
+      `SELECT txn_id, moved, reclassified_at, reverted_at FROM reclassify_log`
+    );
+    const done = new Set(log.rows.filter((r) => !r.reverted_at).map((r) => r.txn_id));
+    const pending = belt.filter((r) => !done.has(r.txnId));
+    let achBalance: number | null = null;
+    try {
+      const api = await createQboApi();
+      const ach = (await api.listAccounts()).find((a: any) => a.Name === 'ACH');
+      achBalance = ach ? Number(ach.CurrentBalance) : null;
+    } catch { /* balance is a nicety */ }
+    res.json({
+      beltTotal: belt.length,
+      done: done.size,
+      pending: pending.length,
+      pendingAmount: Math.round(pending.reduce((s, r) => s + r.expectedAmount, 0) * 100) / 100,
+      movedAmount: Math.round(log.rows.filter((r) => !r.reverted_at).reduce((s, r) => s + Number(r.moved), 0) * 100) / 100,
+      achBalance,
+    });
+  })
+);
+
+app.post(
+  '/api/reclassify/run',
+  requireAuth,
+  requireAdmin,
+  asyncRoute(async (req, res) => {
+    const limit = Math.min(Math.max(parseInt(String(req.body?.limit ?? '25'), 10) || 25, 1), 100);
+    const dryRun = req.body?.dryRun === true;
+    const belt = loadBelt();
+    const log = await getPool().query(`SELECT txn_id FROM reclassify_log WHERE reverted_at IS NULL`);
+    const done = new Set(log.rows.map((r) => r.txn_id));
+    const batch = belt.filter((r) => !done.has(r.txnId)).slice(0, limit);
+    const api = await createQboApi(); // writes always go straight to QuickBooks, never the mirror
+    const results: any[] = [];
+    for (const row of batch) {
+      try {
+        const live = await api.getPurchase!(row.txnId);
+        const plan = planReclassify(live, await reclassifyCfg(api, row.expectedAmount));
+        if (!plan.ok) {
+          results.push({ txnId: row.txnId, status: 'skipped', reason: plan.reason });
+          continue;
+        }
+        if (dryRun) {
+          results.push({ txnId: row.txnId, status: 'would-reclassify', amount: plan.moving });
+          continue;
+        }
+        const saved = await api.updatePurchase!(plan.updated);
+        await getPool().query(
+          `INSERT INTO reclassify_log (txn_id, before, after, moved)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (txn_id) DO UPDATE SET before = EXCLUDED.before, after = EXCLUDED.after,
+             moved = EXCLUDED.moved, reclassified_at = now(), reverted_at = NULL`,
+          [row.txnId, JSON.stringify(live), JSON.stringify(saved), plan.moving]
+        );
+        await upsertTxns('Purchase', [saved]); // keep the mirror truthful immediately
+        results.push({ txnId: row.txnId, status: 'reclassified', amount: plan.moving });
+      } catch (err: any) {
+        results.push({ txnId: row.txnId, status: 'error', reason: err.message?.slice(0, 200) });
+      }
+    }
+    const ok = results.filter((r) => r.status === 'reclassified' || r.status === 'would-reclassify');
+    res.json({
+      dryRun,
+      attempted: batch.length,
+      succeeded: ok.length,
+      amount: Math.round(ok.reduce((s, r) => s + (r.amount || 0), 0) * 100) / 100,
+      results,
+    });
+  })
+);
+
+app.post(
+  '/api/reclassify/revert',
+  requireAuth,
+  requireAdmin,
+  asyncRoute(async (req, res) => {
+    const txnIds: string[] = Array.isArray(req.body?.txnIds) ? req.body.txnIds.map(String) : [];
+    if (!txnIds.length) return res.status(400).json({ error: 'Provide { txnIds: [...] }' });
+    const api = await createQboApi();
+    const results: any[] = [];
+    for (const id of txnIds.slice(0, 100)) {
+      try {
+        const log = await getPool().query(`SELECT before FROM reclassify_log WHERE txn_id = $1`, [id]);
+        if (!log.rows.length) { results.push({ txnId: id, status: 'skipped', reason: 'not in reclassify log' }); continue; }
+        const live = await api.getPurchase!(id);
+        const plan = planRevert(live, log.rows[0].before);
+        if (!plan.ok) { results.push({ txnId: id, status: 'skipped', reason: plan.reason }); continue; }
+        const saved = await api.updatePurchase!(plan.updated);
+        await getPool().query(`UPDATE reclassify_log SET reverted_at = now() WHERE txn_id = $1`, [id]);
+        await upsertTxns('Purchase', [saved]);
+        results.push({ txnId: id, status: 'reverted' });
+      } catch (err: any) {
+        results.push({ txnId: id, status: 'error', reason: err.message?.slice(0, 200) });
+      }
+    }
+    res.json({ results });
+  })
+);
+
 // ---- automated reconciliation checks ----
 // Every methodology bug found while building this app was caught by one of
 // these tie-outs run by hand; this endpoint runs them all for any range.
@@ -1668,6 +1801,7 @@ app.get('/bank', requireAuth, (_req, res) => res.sendFile(pub('bank.html')));
 app.get('/cashflow', requireAuth, (_req, res) => res.sendFile(pub('cashflow.html')));
 app.get('/inventory', requireAuth, (_req, res) => res.sendFile(pub('inventory.html')));
 app.get('/checks', requireAuth, (_req, res) => res.sendFile(pub('checks.html')));
+app.get('/cleanup', requireAuth, (_req, res) => res.sendFile(pub('cleanup.html')));
 app.get('/password', requireAuth, (_req, res) => res.sendFile(pub('password.html')));
 app.get('/users', requireAuth, (_req, res) => res.sendFile(pub('users.html')));
 

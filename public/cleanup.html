@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ACH Cleanup · Pictureline</title>
+<link rel="stylesheet" href="/theme.css">
+<style>
+  .big{font-size:30px;font-weight:700;font-variant-numeric:tabular-nums}
+  .btnrow{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0}
+  .res{font-size:13px;max-height:340px;overflow-y:auto;border:1px solid var(--hairline);border-radius:10px;padding:8px 12px;margin-top:10px}
+  .res div{padding:2px 0;border-bottom:1px solid var(--hairline)}
+  .ok{color:#34c759} .skip{color:#c2410c} .err{color:var(--bad)}
+</style>
+</head>
+<body>
+<div class="topbar"><div class="topbar-inner">
+  <a class="brand" href="/">Pictureline <span>Cash Reports</span></a>
+  <a class="crumb" href="/">← All reports</a>
+  <div class="spacer"></div>
+  <a class="crumb" href="/auth/logout">Sign out</a>
+</div></div>
+
+<div class="wrap">
+  <h1 class="title">ACH Cleanup</h1>
+  <p class="subtitle">Reclassifies the evidenced duplicate feed expenses to the ACH clearing account — admin only, every row re-verified live before writing, every change reversible.</p>
+  <div class="banner" id="banner"></div>
+
+  <div class="kpis" style="margin-top:22px">
+    <div class="kpi"><div class="k-label">Remaining on the belt</div><div class="big" id="kPend">—</div><div class="k-note" id="kPendAmt">—</div></div>
+    <div class="kpi"><div class="k-label">Reclassified so far</div><div class="big" id="kDone">—</div><div class="k-note" id="kMoved">—</div></div>
+    <div class="kpi"><div class="k-label">ACH account balance</div><div class="big" id="kAch">—</div><div class="k-note">Finish line: $0.00 (plus overpayment residue)</div></div>
+  </div>
+
+  <div class="card">
+    <h2>Run</h2>
+    <p style="color:var(--ink-2);font-size:14px">Start with a dry run (checks everything, writes nothing). Then reclassify a small batch and spot-check a couple in QuickBooks before running big batches. Skipped rows are never written — they're listed with the reason.</p>
+    <div class="btnrow">
+      <button class="btn" id="bDry">Dry run next 25</button>
+      <button class="btn primary" id="bRun25">Reclassify next 25</button>
+      <button class="btn primary" id="bRun100">Reclassify next 100</button>
+    </div>
+    <div class="res" id="res" style="display:none"></div>
+  </div>
+
+  <div class="card">
+    <h2>Undo <span class="hint">— paste transaction IDs from the results, comma-separated</span></h2>
+    <div class="range">
+      <input type="text" id="revIds" placeholder="e.g. 50792, 50939" style="font:inherit;font-size:13px;color:var(--ink);background:var(--surface);border:1px solid var(--hairline);border-radius:10px;padding:7px 11px;width:340px">
+      <button class="btn" id="bRev">Revert</button>
+    </div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+<script>
+let busy=false;
+async function status(){
+  try{
+    const d=await jfetch('/api/reclassify/status');
+    $('kPend').textContent=d.pending;
+    $('kPendAmt').textContent=usd2.format(d.pendingAmount)+' still to move';
+    $('kDone').textContent=d.done+' of '+d.beltTotal;
+    $('kMoved').textContent=usd2.format(d.movedAmount)+' moved to ACH';
+    $('kAch').textContent=d.achBalance===null?'—':usd2.format(d.achBalance);
+    $('kAch').classList.toggle('neg', d.achBalance<0);
+  }catch(e){
+    showBanner('<strong>Admin only.</strong> This page works only for admin sign-ins ('+escapeHtml(e.message)+').');
+  }
+}
+function show(rows){
+  const box=$('res'); box.style.display=''; box.innerHTML='';
+  for(const r of rows){
+    const cls=r.status==='reclassified'||r.status==='would-reclassify'?'ok':(r.status==='error'?'err':'skip');
+    const div=document.createElement('div');
+    div.innerHTML='<span class="'+cls+'">'+r.status+'</span> · txn '+r.txnId+(r.amount?' · '+usd2.format(r.amount):'')+(r.reason?' · '+escapeHtml(r.reason):'');
+    box.appendChild(div);
+  }
+}
+async function run(limit,dry){
+  if(busy)return; busy=true; setLoading(true);
+  try{
+    const res=await fetch('/api/reclassify/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({limit:limit,dryRun:dry})});
+    const d=await res.json();
+    if(!res.ok){showBanner('<strong>Error.</strong> '+escapeHtml(d.error||'')); return;}
+    showBanner((dry?'<strong>Dry run:</strong> ':'<strong>Done:</strong> ')+d.succeeded+' of '+d.attempted+' · '+usd2.format(d.amount));
+    show(d.results); status();
+  }catch(e){showBanner('<strong>Error.</strong> '+escapeHtml(e.message));}
+  finally{busy=false; setLoading(false);}
+}
+$('bDry').addEventListener('click',()=>run(25,true));
+$('bRun25').addEventListener('click',()=>run(25,false));
+$('bRun100').addEventListener('click',()=>run(100,false));
+$('bRev').addEventListener('click',async()=>{
+  const ids=$('revIds').value.split(',').map(s=>s.trim()).filter(Boolean);
+  if(!ids.length)return;
+  if(!confirm('Revert '+ids.length+' transaction(s) back to Material Inventory?'))return;
+  const res=await fetch('/api/reclassify/revert',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({txnIds:ids})});
+  const d=await res.json(); show(d.results||[]); status();
+});
+status();
+</script>
+</body>
+</html>

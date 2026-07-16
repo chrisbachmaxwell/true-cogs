@@ -40,7 +40,7 @@ export async function syncStatus(): Promise<SyncStatus> {
   return { running, lastSyncAt: await getConfigValue(LAST_SYNC_KEY), lastResult };
 }
 
-async function upsertTxns(entity: string, txns: any[]): Promise<number> {
+export async function upsertTxns(entity: string, txns: any[]): Promise<number> {
   const db = getPool();
   let n = 0;
   for (const t of txns) {

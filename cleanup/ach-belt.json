@@ -1,0 +1,2981 @@
+{
+ "description": "ACH-era duplicate feed expenses to reclassify to the ACH clearing account. Generated 2026-07-16 from memo/amount-evidenced matching; the 8 uncertain rows are deliberately absent.",
+ "targetAccount": "ACH",
+ "rows": [
+  {
+   "txnId": "34084",
+   "expectedAmount": 214324.83,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-10-23",
+   "pairedTotal": 214324.83
+  },
+  {
+   "txnId": "51789",
+   "expectedAmount": 185532.21,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-12-12",
+   "pairedTotal": 185532.21
+  },
+  {
+   "txnId": "50586",
+   "expectedAmount": 168387.88,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-11-19",
+   "pairedTotal": 168387.88
+  },
+  {
+   "txnId": "40357",
+   "expectedAmount": 123579.5,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-03-25",
+   "pairedTotal": 123579.54
+  },
+  {
+   "txnId": "43363",
+   "expectedAmount": 122104.73,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-06-05",
+   "pairedTotal": 122104.79
+  },
+  {
+   "txnId": "43704",
+   "expectedAmount": 122051.7,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-06-13",
+   "pairedTotal": 122051.7
+  },
+  {
+   "txnId": "42583",
+   "expectedAmount": 118101.84,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-05-15",
+   "pairedTotal": 118101.84
+  },
+  {
+   "txnId": "36839",
+   "expectedAmount": 116139.44,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-12-23",
+   "pairedTotal": 116139.44
+  },
+  {
+   "txnId": "33164",
+   "expectedAmount": 115369.04,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-10-01",
+   "pairedTotal": 115369.04
+  },
+  {
+   "txnId": "36932",
+   "expectedAmount": 107831.14,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-12-26",
+   "pairedTotal": 107831.14
+  },
+  {
+   "txnId": "41603",
+   "expectedAmount": 102684.62,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-04-24",
+   "pairedTotal": 102684.61
+  },
+  {
+   "txnId": "51277",
+   "expectedAmount": 102118.38,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-12-12",
+   "pairedTotal": 102118.38
+  },
+  {
+   "txnId": "48315",
+   "expectedAmount": 94770.77,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-10-08",
+   "pairedTotal": 94770.77
+  },
+  {
+   "txnId": "45674",
+   "expectedAmount": 93585.34,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-08-04",
+   "pairedTotal": 93584.97
+  },
+  {
+   "txnId": "45276",
+   "expectedAmount": 93529.67,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-07-23",
+   "pairedTotal": 93529.67
+  },
+  {
+   "txnId": "32826",
+   "expectedAmount": 93060.74,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-09-23",
+   "pairedTotal": 93060.74
+  },
+  {
+   "txnId": "47216",
+   "expectedAmount": 90919.44,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-09-12",
+   "pairedTotal": 90919.44
+  },
+  {
+   "txnId": "46326",
+   "expectedAmount": 89713.25,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-08-20",
+   "pairedTotal": 89713.25
+  },
+  {
+   "txnId": "48936",
+   "expectedAmount": 89097.88,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-10-08",
+   "pairedTotal": 89097.89
+  },
+  {
+   "txnId": "45275",
+   "expectedAmount": 88288.6,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-07-23",
+   "pairedTotal": 88288.6
+  },
+  {
+   "txnId": "46863",
+   "expectedAmount": 86907.09,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-09-02",
+   "pairedTotal": 86907.09
+  },
+  {
+   "txnId": "43113",
+   "expectedAmount": 86850.31,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-05-29",
+   "pairedTotal": 86850.31
+  },
+  {
+   "txnId": "48787",
+   "expectedAmount": 86097.51,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-10-17",
+   "pairedTotal": 86097.51
+  },
+  {
+   "txnId": "40632",
+   "expectedAmount": 85158,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-03-27",
+   "pairedTotal": 85158
+  },
+  {
+   "txnId": "41411",
+   "expectedAmount": 82369.22,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-04-18",
+   "pairedTotal": 82369.22
+  },
+  {
+   "txnId": "44458",
+   "expectedAmount": 81240.11,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-07-02",
+   "pairedTotal": 81240.1
+  },
+  {
+   "txnId": "44090",
+   "expectedAmount": 80386.52,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-06-20",
+   "pairedTotal": 80386.53
+  },
+  {
+   "txnId": "44461",
+   "expectedAmount": 77276.58,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-07-02",
+   "pairedTotal": 77276.59
+  },
+  {
+   "txnId": "33293",
+   "expectedAmount": 77233.95,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-10-03",
+   "pairedTotal": 77233.95
+  },
+  {
+   "txnId": "42994",
+   "expectedAmount": 74300.4,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-05-28",
+   "pairedTotal": 74300.36
+  },
+  {
+   "txnId": "48312",
+   "expectedAmount": 73879.57,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-10-08",
+   "pairedTotal": 73879.6
+  },
+  {
+   "txnId": "34869",
+   "expectedAmount": 73757.22,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-11-07",
+   "pairedTotal": 73757.22
+  },
+  {
+   "txnId": "36128",
+   "expectedAmount": 73143.61,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-11-27",
+   "pairedTotal": 73143.61
+  },
+  {
+   "txnId": "43968",
+   "expectedAmount": 72605.3,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-06-18",
+   "pairedTotal": 72605.3
+  },
+  {
+   "txnId": "44033",
+   "expectedAmount": 67307.18,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-06-20",
+   "pairedTotal": 67307.18
+  },
+  {
+   "txnId": "35710",
+   "expectedAmount": 64572.29,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-11-26",
+   "pairedTotal": 64572.29
+  },
+  {
+   "txnId": "41797",
+   "expectedAmount": 64142.52,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-04-30",
+   "pairedTotal": 64142.52
+  },
+  {
+   "txnId": "32941",
+   "expectedAmount": 63209.65,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-09-25",
+   "pairedTotal": 63209.65
+  },
+  {
+   "txnId": "41085",
+   "expectedAmount": 62465.84,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-04-11",
+   "pairedTotal": 62465.84
+  },
+  {
+   "txnId": "38310",
+   "expectedAmount": 62415.27,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-01-30",
+   "pairedTotal": 62415.27
+  },
+  {
+   "txnId": "36953",
+   "expectedAmount": 62379.44,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-12-27",
+   "pairedTotal": 62379.44
+  },
+  {
+   "txnId": "39410",
+   "expectedAmount": 61912.19,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-02-27",
+   "pairedTotal": 61912.19
+  },
+  {
+   "txnId": "36899",
+   "expectedAmount": 59794.17,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-12-24",
+   "pairedTotal": 59794.17
+  },
+  {
+   "txnId": "40830",
+   "expectedAmount": 58466.73,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-03-25",
+   "pairedTotal": 58466.73
+  },
+  {
+   "txnId": "48778",
+   "expectedAmount": 58035.72,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-10-17",
+   "pairedTotal": 58035.72
+  },
+  {
+   "txnId": "44264",
+   "expectedAmount": 57643.38,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-06-26",
+   "pairedTotal": 57643.32
+  },
+  {
+   "txnId": "32561",
+   "expectedAmount": 57484.91,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-09-17",
+   "pairedTotal": 57484.92
+  },
+  {
+   "txnId": "36930",
+   "expectedAmount": 56865.04,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-12-26",
+   "pairedTotal": 56865.04
+  },
+  {
+   "txnId": "31953",
+   "expectedAmount": 55692.84,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-08-30",
+   "pairedTotal": 55692.84
+  },
+  {
+   "txnId": "36395",
+   "expectedAmount": 55611.68,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-12-12",
+   "pairedTotal": 55611.69
+  },
+  {
+   "txnId": "32721",
+   "expectedAmount": 55201.44,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-09-19",
+   "pairedTotal": 55201.44
+  },
+  {
+   "txnId": "32256",
+   "expectedAmount": 54315.22,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-09-09",
+   "pairedTotal": 54315.24
+  },
+  {
+   "txnId": "41799",
+   "expectedAmount": 52926.15,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-04-30",
+   "pairedTotal": 52926.15
+  },
+  {
+   "txnId": "43595",
+   "expectedAmount": 52791.26,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-06-02",
+   "pairedTotal": 52791.31
+  },
+  {
+   "txnId": "32026",
+   "expectedAmount": 52357.65,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-09-04",
+   "pairedTotal": 52357.62
+  },
+  {
+   "txnId": "51756",
+   "expectedAmount": 52208.15,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-12-17",
+   "pairedTotal": 52208.15
+  },
+  {
+   "txnId": "46323",
+   "expectedAmount": 52080.89,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-08-20",
+   "pairedTotal": 52080.89
+  },
+  {
+   "txnId": "46123",
+   "expectedAmount": 51811.39,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-08-14",
+   "pairedTotal": 51811.39
+  },
+  {
+   "txnId": "34079",
+   "expectedAmount": 51169.02,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-10-23",
+   "pairedTotal": 51170.02
+  },
+  {
+   "txnId": "40217",
+   "expectedAmount": 50948.6,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-03-20",
+   "pairedTotal": 50948.6
+  },
+  {
+   "txnId": "40213",
+   "expectedAmount": 49833.7,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-03-20",
+   "pairedTotal": 50733.7
+  },
+  {
+   "txnId": "34206",
+   "expectedAmount": 50188.18,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-10-26",
+   "pairedTotal": 50188.17
+  },
+  {
+   "txnId": "33924",
+   "expectedAmount": 50130.56,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-10-11",
+   "pairedTotal": 50130.56
+  },
+  {
+   "txnId": "41504",
+   "expectedAmount": 49503.02,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-04-22",
+   "pairedTotal": 49503.06
+  },
+  {
+   "txnId": "32718",
+   "expectedAmount": 49310.96,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-09-18",
+   "pairedTotal": 49310.96
+  },
+  {
+   "txnId": "47732",
+   "expectedAmount": 48786.92,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-09-25",
+   "pairedTotal": 48786.92
+  },
+  {
+   "txnId": "46951",
+   "expectedAmount": 48777.67,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-09-05",
+   "pairedTotal": 48777.67
+  },
+  {
+   "txnId": "41601",
+   "expectedAmount": 48217.94,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-04-24",
+   "pairedTotal": 48217.94
+  },
+  {
+   "txnId": "39711",
+   "expectedAmount": 46725.89,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-03-06",
+   "pairedTotal": 46725.89
+  },
+  {
+   "txnId": "36630",
+   "expectedAmount": 46385.6,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-12-18",
+   "pairedTotal": 46385.6
+  },
+  {
+   "txnId": "48153",
+   "expectedAmount": 46166.28,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-10-03",
+   "pairedTotal": 46166.28
+  },
+  {
+   "txnId": "50279",
+   "expectedAmount": 45906.21,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-11-21",
+   "pairedTotal": 45906.81
+  },
+  {
+   "txnId": "49968",
+   "expectedAmount": 45648.52,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-11-11",
+   "pairedTotal": 45648.52
+  },
+  {
+   "txnId": "49745",
+   "expectedAmount": 45533.22,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-11-07",
+   "pairedTotal": 45533.22
+  },
+  {
+   "txnId": "35713",
+   "expectedAmount": 45411.01,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-11-26",
+   "pairedTotal": 45411
+  },
+  {
+   "txnId": "40628",
+   "expectedAmount": 44878.81,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-03-27",
+   "pairedTotal": 44878.81
+  },
+  {
+   "txnId": "38308",
+   "expectedAmount": 44829.31,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-01-30",
+   "pairedTotal": 44829.31
+  },
+  {
+   "txnId": "41404",
+   "expectedAmount": 43218.81,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-04-18",
+   "pairedTotal": 43218.79
+  },
+  {
+   "txnId": "35488",
+   "expectedAmount": 43033.49,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-11-21",
+   "pairedTotal": 43033.49
+  },
+  {
+   "txnId": "36049",
+   "expectedAmount": 43000.68,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-12-04",
+   "pairedTotal": 43000.68
+  },
+  {
+   "txnId": "45665",
+   "expectedAmount": 42757,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-07-25",
+   "pairedTotal": 42757
+  },
+  {
+   "txnId": "42789",
+   "expectedAmount": 42581.17,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-05-21",
+   "pairedTotal": 42581.16
+  },
+  {
+   "txnId": "35863",
+   "expectedAmount": 42555.48,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-11-27",
+   "pairedTotal": 42555.48
+  },
+  {
+   "txnId": "50654",
+   "expectedAmount": 42496.62,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-12-01",
+   "pairedTotal": 42497.05
+  },
+  {
+   "txnId": "33579",
+   "expectedAmount": 42324.08,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-10-09",
+   "pairedTotal": 42324.08
+  },
+  {
+   "txnId": "42502",
+   "expectedAmount": 41872.99,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-05-15",
+   "pairedTotal": 41872.99
+  },
+  {
+   "txnId": "47528",
+   "expectedAmount": 41828.53,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-09-19",
+   "pairedTotal": 41828.53
+  },
+  {
+   "txnId": "46862",
+   "expectedAmount": 41751.62,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-09-02",
+   "pairedTotal": 41751.63
+  },
+  {
+   "txnId": "36393",
+   "expectedAmount": 41411.1,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-12-12",
+   "pairedTotal": 41411.1
+  },
+  {
+   "txnId": "44433",
+   "expectedAmount": 41080.23,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-06-27",
+   "pairedTotal": 41080.24
+  },
+  {
+   "txnId": "32028",
+   "expectedAmount": 40653.93,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-09-04",
+   "pairedTotal": 40653.93
+  },
+  {
+   "txnId": "50243",
+   "expectedAmount": 40049.3,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-11-19",
+   "pairedTotal": 40049.29
+  },
+  {
+   "txnId": "40630",
+   "expectedAmount": 39645.26,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-03-27",
+   "pairedTotal": 39645.26
+  },
+  {
+   "txnId": "36793",
+   "expectedAmount": 39474.04,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-12-20",
+   "pairedTotal": 39474.06
+  },
+  {
+   "txnId": "34477",
+   "expectedAmount": 39000,
+   "pairedVendor": "Profoto US Inc.",
+   "pairedDate": "2024-10-29",
+   "pairedTotal": 39000
+  },
+  {
+   "txnId": "41565",
+   "expectedAmount": 38322.35,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-06-02",
+   "pairedTotal": 38651.15
+  },
+  {
+   "txnId": "51795",
+   "expectedAmount": 37634.08,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-12-16",
+   "pairedTotal": 37634.08
+  },
+  {
+   "txnId": "39249",
+   "expectedAmount": 37318.92,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-02-25",
+   "pairedTotal": 37318.92
+  },
+  {
+   "txnId": "32025",
+   "expectedAmount": 36994.54,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-09-04",
+   "pairedTotal": 36994.54
+  },
+  {
+   "txnId": "40444",
+   "expectedAmount": 36853.12,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-03-26",
+   "pairedTotal": 36853.12
+  },
+  {
+   "txnId": "32419",
+   "expectedAmount": 36560.65,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-09-12",
+   "pairedTotal": 36560.68
+  },
+  {
+   "txnId": "32701",
+   "expectedAmount": 36226.56,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-09-18",
+   "pairedTotal": 36226.59
+  },
+  {
+   "txnId": "38884",
+   "expectedAmount": 36208.5,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-02-13",
+   "pairedTotal": 36208.5
+  },
+  {
+   "txnId": "39056",
+   "expectedAmount": 36151.29,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-02-18",
+   "pairedTotal": 36151.29
+  },
+  {
+   "txnId": "36629",
+   "expectedAmount": 35789.55,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-12-18",
+   "pairedTotal": 35789.56
+  },
+  {
+   "txnId": "38503",
+   "expectedAmount": 35578.05,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-02-05",
+   "pairedTotal": 35578.05
+  },
+  {
+   "txnId": "34533",
+   "expectedAmount": 35569.88,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-10-30",
+   "pairedTotal": 35569.88
+  },
+  {
+   "txnId": "49256",
+   "expectedAmount": 35441.77,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-10-21",
+   "pairedTotal": 35441.77
+  },
+  {
+   "txnId": "39784",
+   "expectedAmount": 35247.94,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-03-10",
+   "pairedTotal": 35247.5
+  },
+  {
+   "txnId": "32565",
+   "expectedAmount": 35038,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-09-17",
+   "pairedTotal": 35038
+  },
+  {
+   "txnId": "41564",
+   "expectedAmount": 34996.58,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-04-23",
+   "pairedTotal": 34996.58
+  },
+  {
+   "txnId": "42591",
+   "expectedAmount": 34903.65,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-05-16",
+   "pairedTotal": 34903.65
+  },
+  {
+   "txnId": "42386",
+   "expectedAmount": 34605.78,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-05-13",
+   "pairedTotal": 34605.78
+  },
+  {
+   "txnId": "50141",
+   "expectedAmount": 34526.81,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-11-17",
+   "pairedTotal": 34526.81
+  },
+  {
+   "txnId": "34207",
+   "expectedAmount": 33505.86,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-10-26",
+   "pairedTotal": 33505.86
+  },
+  {
+   "txnId": "49116",
+   "expectedAmount": 32925.2,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-10-27",
+   "pairedTotal": 32925.2
+  },
+  {
+   "txnId": "46632",
+   "expectedAmount": 32901.41,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-08-27",
+   "pairedTotal": 32901.41
+  },
+  {
+   "txnId": "33169",
+   "expectedAmount": 32631.39,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-10-01",
+   "pairedTotal": 32631.39
+  },
+  {
+   "txnId": "37444",
+   "expectedAmount": 32538.5,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-01-08",
+   "pairedTotal": 32538.5
+  },
+  {
+   "txnId": "47010",
+   "expectedAmount": 32031.16,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-09-08",
+   "pairedTotal": 32031.16
+  },
+  {
+   "txnId": "38985",
+   "expectedAmount": 31543.41,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-02-18",
+   "pairedTotal": 31543.41
+  },
+  {
+   "txnId": "36257",
+   "expectedAmount": 31539,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-12-10",
+   "pairedTotal": 31539
+  },
+  {
+   "txnId": "50540",
+   "expectedAmount": 31315.4,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-11-18",
+   "pairedTotal": 31315.4
+  },
+  {
+   "txnId": "46328",
+   "expectedAmount": 31253.03,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-08-20",
+   "pairedTotal": 31253.03
+  },
+  {
+   "txnId": "38473",
+   "expectedAmount": 31197.79,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-02-04",
+   "pairedTotal": 31197.79
+  },
+  {
+   "txnId": "39644",
+   "expectedAmount": 31016.57,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-03-05",
+   "pairedTotal": 31016.57
+  },
+  {
+   "txnId": "44715",
+   "expectedAmount": 30764.77,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-07-10",
+   "pairedTotal": 30764.77
+  },
+  {
+   "txnId": "47532",
+   "expectedAmount": 30727.67,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-09-19",
+   "pairedTotal": 30726.67
+  },
+  {
+   "txnId": "35714",
+   "expectedAmount": 30696.55,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-11-26",
+   "pairedTotal": 30696.55
+  },
+  {
+   "txnId": "40470",
+   "expectedAmount": 30198.25,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-03-27",
+   "pairedTotal": 30198.26
+  },
+  {
+   "txnId": "38726",
+   "expectedAmount": 30094.17,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-02-10",
+   "pairedTotal": 30094.17
+  },
+  {
+   "txnId": "31800",
+   "expectedAmount": 29827.97,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-08-27",
+   "pairedTotal": 29827.97
+  },
+  {
+   "txnId": "49589",
+   "expectedAmount": 29819.13,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-11-04",
+   "pairedTotal": 29819.11
+  },
+  {
+   "txnId": "32853",
+   "expectedAmount": 29780.56,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-09-24",
+   "pairedTotal": 29780.56
+  },
+  {
+   "txnId": "49066",
+   "expectedAmount": 29732.79,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-10-24",
+   "pairedTotal": 29732.79
+  },
+  {
+   "txnId": "38500",
+   "expectedAmount": 29284.73,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-02-05",
+   "pairedTotal": 29284.62
+  },
+  {
+   "txnId": "39647",
+   "expectedAmount": 29272.88,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-03-05",
+   "pairedTotal": 29272.88
+  },
+  {
+   "txnId": "39300",
+   "expectedAmount": 29227.7,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-02-26",
+   "pairedTotal": 29227.68
+  },
+  {
+   "txnId": "47735",
+   "expectedAmount": 29172.95,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-09-25",
+   "pairedTotal": 29172.95
+  },
+  {
+   "txnId": "45997",
+   "expectedAmount": 29131.29,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-08-11",
+   "pairedTotal": 29131.29
+  },
+  {
+   "txnId": "35199",
+   "expectedAmount": 28983.52,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-11-14",
+   "pairedTotal": 28983.51
+  },
+  {
+   "txnId": "50037",
+   "expectedAmount": 28674.67,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-11-14",
+   "pairedTotal": 28674.67
+  },
+  {
+   "txnId": "33285",
+   "expectedAmount": 28405.79,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-10-03",
+   "pairedTotal": 28405.76
+  },
+  {
+   "txnId": "44195",
+   "expectedAmount": 28178.06,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-06-25",
+   "pairedTotal": 28178.06
+  },
+  {
+   "txnId": "50593",
+   "expectedAmount": 27810.02,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-11-18",
+   "pairedTotal": 27810.03
+  },
+  {
+   "txnId": "48577",
+   "expectedAmount": 27718.36,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-10-14",
+   "pairedTotal": 27718.36
+  },
+  {
+   "txnId": "47415",
+   "expectedAmount": 27385.91,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-09-17",
+   "pairedTotal": 27385.91
+  },
+  {
+   "txnId": "36099",
+   "expectedAmount": 27292.49,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-12-05",
+   "pairedTotal": 27292.49
+  },
+  {
+   "txnId": "40161",
+   "expectedAmount": 27180.43,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-03-18",
+   "pairedTotal": 27180.43
+  },
+  {
+   "txnId": "49114",
+   "expectedAmount": 27121.21,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-10-27",
+   "pairedTotal": 27121.22
+  },
+  {
+   "txnId": "42619",
+   "expectedAmount": 27111.63,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-05-19",
+   "pairedTotal": 27111.63
+  },
+  {
+   "txnId": "50940",
+   "expectedAmount": 27062.72,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-12-05",
+   "pairedTotal": 27062.72
+  },
+  {
+   "txnId": "50409",
+   "expectedAmount": 27007.95,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-11-24",
+   "pairedTotal": 27007.96
+  },
+  {
+   "txnId": "46630",
+   "expectedAmount": 26543.9,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-08-27",
+   "pairedTotal": 26543.9
+  },
+  {
+   "txnId": "37686",
+   "expectedAmount": 26257.67,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-01-14",
+   "pairedTotal": 26257.67
+  },
+  {
+   "txnId": "49681",
+   "expectedAmount": 26192.6,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-11-06",
+   "pairedTotal": 26192.6
+  },
+  {
+   "txnId": "34047",
+   "expectedAmount": 26189.63,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-10-21",
+   "pairedTotal": 26190.63
+  },
+  {
+   "txnId": "40633",
+   "expectedAmount": 26099.53,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-03-20",
+   "pairedTotal": 26099.53
+  },
+  {
+   "txnId": "43367",
+   "expectedAmount": 26054.69,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-06-05",
+   "pairedTotal": 26054.69
+  },
+  {
+   "txnId": "45536",
+   "expectedAmount": 25768.86,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-07-30",
+   "pairedTotal": 25768.86
+  },
+  {
+   "txnId": "35603",
+   "expectedAmount": 25620.67,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-11-25",
+   "pairedTotal": 25620.67
+  },
+  {
+   "txnId": "39979",
+   "expectedAmount": 25424.14,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-03-14",
+   "pairedTotal": 25424.14
+  },
+  {
+   "txnId": "51531",
+   "expectedAmount": 25115.5,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-12-18",
+   "pairedTotal": 25321.82
+  },
+  {
+   "txnId": "49677",
+   "expectedAmount": 25304.87,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-11-06",
+   "pairedTotal": 25304.88
+  },
+  {
+   "txnId": "50587",
+   "expectedAmount": 25160.95,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-11-19",
+   "pairedTotal": 25160.95
+  },
+  {
+   "txnId": "40072",
+   "expectedAmount": 24713.65,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-03-17",
+   "pairedTotal": 24713.65
+  },
+  {
+   "txnId": "35388",
+   "expectedAmount": 24671.59,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-11-19",
+   "pairedTotal": 24671.59
+  },
+  {
+   "txnId": "33800",
+   "expectedAmount": 24495.67,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-10-11",
+   "pairedTotal": 24495.67
+  },
+  {
+   "txnId": "33392",
+   "expectedAmount": 24415.34,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-10-09",
+   "pairedTotal": 24415.36
+  },
+  {
+   "txnId": "45962",
+   "expectedAmount": 24360.9,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-08-08",
+   "pairedTotal": 24360.9
+  },
+  {
+   "txnId": "49254",
+   "expectedAmount": 23986.46,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-10-29",
+   "pairedTotal": 23986.46
+  },
+  {
+   "txnId": "37220",
+   "expectedAmount": 23927.89,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-12-26",
+   "pairedTotal": 23927.89
+  },
+  {
+   "txnId": "37533",
+   "expectedAmount": 23794.28,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-01-10",
+   "pairedTotal": 23794.28
+  },
+  {
+   "txnId": "42794",
+   "expectedAmount": 23786.25,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-05-21",
+   "pairedTotal": 23776.25
+  },
+  {
+   "txnId": "35261",
+   "expectedAmount": 23692.41,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-11-15",
+   "pairedTotal": 23692.51
+  },
+  {
+   "txnId": "37163",
+   "expectedAmount": 23622.14,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-12-23",
+   "pairedTotal": 23622.14
+  },
+  {
+   "txnId": "43593",
+   "expectedAmount": 23409.2,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-06-06",
+   "pairedTotal": 23409.2
+  },
+  {
+   "txnId": "32882",
+   "expectedAmount": 22947.76,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-09-24",
+   "pairedTotal": 22947.76
+  },
+  {
+   "txnId": "34975",
+   "expectedAmount": 22801.14,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-11-08",
+   "pairedTotal": 22801.14
+  },
+  {
+   "txnId": "36835",
+   "expectedAmount": 22729.29,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-12-23",
+   "pairedTotal": 22729.33
+  },
+  {
+   "txnId": "37821",
+   "expectedAmount": 22670.55,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-01-16",
+   "pairedTotal": 22670.56
+  },
+  {
+   "txnId": "34822",
+   "expectedAmount": 22573.98,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-10-25",
+   "pairedTotal": 22573.99
+  },
+  {
+   "txnId": "37162",
+   "expectedAmount": 22535.87,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-12-23",
+   "pairedTotal": 22535.88
+  },
+  {
+   "txnId": "42247",
+   "expectedAmount": 22525.55,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-05-09",
+   "pairedTotal": 22525.55
+  },
+  {
+   "txnId": "46125",
+   "expectedAmount": 22509.07,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-08-14",
+   "pairedTotal": 22509.07
+  },
+  {
+   "txnId": "44718",
+   "expectedAmount": 22198.25,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-07-10",
+   "pairedTotal": 22198.31
+  },
+  {
+   "txnId": "34537",
+   "expectedAmount": 22179.71,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-10-30",
+   "pairedTotal": 22179.72
+  },
+  {
+   "txnId": "34767",
+   "expectedAmount": 22161.75,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-11-04",
+   "pairedTotal": 22159.72
+  },
+  {
+   "txnId": "48154",
+   "expectedAmount": 22153.5,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-10-03",
+   "pairedTotal": 22153.5
+  },
+  {
+   "txnId": "46504",
+   "expectedAmount": 22119.68,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-08-21",
+   "pairedTotal": 22119.69
+  },
+  {
+   "txnId": "41224",
+   "expectedAmount": 22035.56,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-04-15",
+   "pairedTotal": 22035.56
+  },
+  {
+   "txnId": "50590",
+   "expectedAmount": 21521.44,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-11-28",
+   "pairedTotal": 21521.44
+  },
+  {
+   "txnId": "41916",
+   "expectedAmount": 20991.12,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-05-02",
+   "pairedTotal": 20991.12
+  },
+  {
+   "txnId": "47664",
+   "expectedAmount": 20686.63,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-09-15",
+   "pairedTotal": 20686.63
+  },
+  {
+   "txnId": "38794",
+   "expectedAmount": 20665.27,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-02-12",
+   "pairedTotal": 20665.27
+  },
+  {
+   "txnId": "35537",
+   "expectedAmount": 20617.05,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-11-22",
+   "pairedTotal": 20617.05
+  },
+  {
+   "txnId": "35264",
+   "expectedAmount": 20583.88,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-11-11",
+   "pairedTotal": 20583.88
+  },
+  {
+   "txnId": "41027",
+   "expectedAmount": 20561.7,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-04-10",
+   "pairedTotal": 20561.67
+  },
+  {
+   "txnId": "49237",
+   "expectedAmount": 20393.8,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-10-29",
+   "pairedTotal": 20393.8
+  },
+  {
+   "txnId": "39053",
+   "expectedAmount": 20172.42,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-02-18",
+   "pairedTotal": 20172.42
+  },
+  {
+   "txnId": "50405",
+   "expectedAmount": 20147.65,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-11-24",
+   "pairedTotal": 20147.65
+  },
+  {
+   "txnId": "44320",
+   "expectedAmount": 20061.67,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-06-27",
+   "pairedTotal": 20061.67
+  },
+  {
+   "txnId": "33794",
+   "expectedAmount": 20059.31,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-10-14",
+   "pairedTotal": 20059.32
+  },
+  {
+   "txnId": "39869",
+   "expectedAmount": 19916.27,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-03-12",
+   "pairedTotal": 19916.27
+  },
+  {
+   "txnId": "42387",
+   "expectedAmount": 19888.68,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-04-01",
+   "pairedTotal": 19888.67
+  },
+  {
+   "txnId": "46291",
+   "expectedAmount": 19853.92,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-08-18",
+   "pairedTotal": 19853.91
+  },
+  {
+   "txnId": "50827",
+   "expectedAmount": 19839.08,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-12-04",
+   "pairedTotal": 19839.08
+  },
+  {
+   "txnId": "44322",
+   "expectedAmount": 19643.97,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-06-27",
+   "pairedTotal": 19644.97
+  },
+  {
+   "txnId": "38733",
+   "expectedAmount": 19476.26,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-02-11",
+   "pairedTotal": 19476.26
+  },
+  {
+   "txnId": "38102",
+   "expectedAmount": 19471.62,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-01-24",
+   "pairedTotal": 19471.62
+  },
+  {
+   "txnId": "36635",
+   "expectedAmount": 19391.23,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-12-18",
+   "pairedTotal": 19392.23
+  },
+  {
+   "txnId": "35872",
+   "expectedAmount": 19385.41,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-11-29",
+   "pairedTotal": 19385.41
+  },
+  {
+   "txnId": "31247",
+   "expectedAmount": 18999.01,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-08-14",
+   "pairedTotal": 18999.01
+  },
+  {
+   "txnId": "44317",
+   "expectedAmount": 18859.86,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-06-27",
+   "pairedTotal": 18859.86
+  },
+  {
+   "txnId": "49607",
+   "expectedAmount": 18850.81,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-11-05",
+   "pairedTotal": 18850.81
+  },
+  {
+   "txnId": "33855",
+   "expectedAmount": 18803.74,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-10-08",
+   "pairedTotal": 18803.74
+  },
+  {
+   "txnId": "46437",
+   "expectedAmount": 18798.02,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-08-21",
+   "pairedTotal": 18798.02
+  },
+  {
+   "txnId": "46955",
+   "expectedAmount": 18478.53,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-09-05",
+   "pairedTotal": 18478.51
+  },
+  {
+   "txnId": "36103",
+   "expectedAmount": 18203.6,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-12-05",
+   "pairedTotal": 18203.6
+  },
+  {
+   "txnId": "39193",
+   "expectedAmount": 18243.33,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-02-21",
+   "pairedTotal": 18189.84
+  },
+  {
+   "txnId": "31637",
+   "expectedAmount": 17643.78,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-08-13",
+   "pairedTotal": 17643.78
+  },
+  {
+   "txnId": "31938",
+   "expectedAmount": 17556.53,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-08-30",
+   "pairedTotal": 17556.54
+  },
+  {
+   "txnId": "40473",
+   "expectedAmount": 17422.65,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-03-27",
+   "pairedTotal": 17422.65
+  },
+  {
+   "txnId": "37949",
+   "expectedAmount": 17418.95,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-01-21",
+   "pairedTotal": 17418.95
+  },
+  {
+   "txnId": "37442",
+   "expectedAmount": 17281.27,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-01-09",
+   "pairedTotal": 17281.29
+  },
+  {
+   "txnId": "41268",
+   "expectedAmount": 17204.42,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-04-16",
+   "pairedTotal": 17204.42
+  },
+  {
+   "txnId": "32818",
+   "expectedAmount": 16842.88,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-09-23",
+   "pairedTotal": 16842.85
+  },
+  {
+   "txnId": "34769",
+   "expectedAmount": 16685.92,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-11-04",
+   "pairedTotal": 16685.91
+  },
+  {
+   "txnId": "45099",
+   "expectedAmount": 16651.99,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-07-17",
+   "pairedTotal": 16651.93
+  },
+  {
+   "txnId": "46870",
+   "expectedAmount": 16593.9,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-08-12",
+   "pairedTotal": 16593.9
+  },
+  {
+   "txnId": "39561",
+   "expectedAmount": 16534.1,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-03-03",
+   "pairedTotal": 16534.09
+  },
+  {
+   "txnId": "38981",
+   "expectedAmount": 16260.85,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-02-18",
+   "pairedTotal": 16260.85
+  },
+  {
+   "txnId": "33581",
+   "expectedAmount": 16226.8,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-10-09",
+   "pairedTotal": 16226.81
+  },
+  {
+   "txnId": "39408",
+   "expectedAmount": 16211.56,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-02-27",
+   "pairedTotal": 16211.57
+  },
+  {
+   "txnId": "46002",
+   "expectedAmount": 16123.92,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-08-11",
+   "pairedTotal": 16123.9
+  },
+  {
+   "txnId": "46867",
+   "expectedAmount": 15972.19,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-08-12",
+   "pairedTotal": 15972.19
+  },
+  {
+   "txnId": "31279",
+   "expectedAmount": 15940.96,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-08-15",
+   "pairedTotal": 15940.96
+  },
+  {
+   "txnId": "40071",
+   "expectedAmount": 15893.25,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-03-17",
+   "pairedTotal": 15893.25
+  },
+  {
+   "txnId": "48938",
+   "expectedAmount": 15882.32,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-10-08",
+   "pairedTotal": 15882.32
+  },
+  {
+   "txnId": "37597",
+   "expectedAmount": 15665.79,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-01-13",
+   "pairedTotal": 15665.79
+  },
+  {
+   "txnId": "32940",
+   "expectedAmount": 15371.98,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-09-26",
+   "pairedTotal": 15371.98
+  },
+  {
+   "txnId": "40893",
+   "expectedAmount": 15058.95,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-04-08",
+   "pairedTotal": 15058.94
+  },
+  {
+   "txnId": "35490",
+   "expectedAmount": 15010.81,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-11-21",
+   "pairedTotal": 15010.81
+  },
+  {
+   "txnId": "36046",
+   "expectedAmount": 14727.05,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-12-04",
+   "pairedTotal": 14727.05
+  },
+  {
+   "txnId": "47418",
+   "expectedAmount": 14627.95,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-09-17",
+   "pairedTotal": 14627.95
+  },
+  {
+   "txnId": "44111",
+   "expectedAmount": 14581.15,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-06-24",
+   "pairedTotal": 14581.15
+  },
+  {
+   "txnId": "31641",
+   "expectedAmount": 14355.34,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-08-13",
+   "pairedTotal": 14355.34
+  },
+  {
+   "txnId": "35860",
+   "expectedAmount": 14278.4,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-11-27",
+   "pairedTotal": 14278.4
+  },
+  {
+   "txnId": "34849",
+   "expectedAmount": 14273.24,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-11-06",
+   "pairedTotal": 14273.24
+  },
+  {
+   "txnId": "51535",
+   "expectedAmount": 14176.22,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-12-18",
+   "pairedTotal": 14176.22
+  },
+  {
+   "txnId": "45214",
+   "expectedAmount": 14101.09,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-07-21",
+   "pairedTotal": 14101.08
+  },
+  {
+   "txnId": "43667",
+   "expectedAmount": 14021.55,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-06-11",
+   "pairedTotal": 14021.54
+  },
+  {
+   "txnId": "38942",
+   "expectedAmount": 13972.14,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-02-14",
+   "pairedTotal": 13972.14
+  },
+  {
+   "txnId": "50936",
+   "expectedAmount": 13969.98,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-12-05",
+   "pairedTotal": 13969.98
+  },
+  {
+   "txnId": "38640",
+   "expectedAmount": 13888.76,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-02-07",
+   "pairedTotal": 13888.76
+  },
+  {
+   "txnId": "47663",
+   "expectedAmount": 13789.25,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-08-20",
+   "pairedTotal": 13789.22
+  },
+  {
+   "txnId": "50660",
+   "expectedAmount": 13712.37,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-11-28",
+   "pairedTotal": 13712.37
+  },
+  {
+   "txnId": "48210",
+   "expectedAmount": 13632.72,
+   "pairedVendor": "Ingram Micro, Inc.",
+   "pairedDate": "2025-10-06",
+   "pairedTotal": 13632.72
+  },
+  {
+   "txnId": "44669",
+   "expectedAmount": 13531.13,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-07-09",
+   "pairedTotal": 13531.13
+  },
+  {
+   "txnId": "50744",
+   "expectedAmount": 13438.89,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-11-30",
+   "pairedTotal": 13438.89
+  },
+  {
+   "txnId": "31774",
+   "expectedAmount": 13425.07,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-08-27",
+   "pairedTotal": 13425.07
+  },
+  {
+   "txnId": "50245",
+   "expectedAmount": 13290.31,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-11-19",
+   "pairedTotal": 13290.31
+  },
+  {
+   "txnId": "47355",
+   "expectedAmount": 13218.02,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-09-08",
+   "pairedTotal": 13218.03
+  },
+  {
+   "txnId": "45485",
+   "expectedAmount": 13196.62,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-07-29",
+   "pairedTotal": 13196.62
+  },
+  {
+   "txnId": "43596",
+   "expectedAmount": 13176.45,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-06-06",
+   "pairedTotal": 13176.45
+  },
+  {
+   "txnId": "44593",
+   "expectedAmount": 12978,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-06-24",
+   "pairedTotal": 12978
+  },
+  {
+   "txnId": "46108",
+   "expectedAmount": 12927.48,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-08-13",
+   "pairedTotal": 12927.48
+  },
+  {
+   "txnId": "47869",
+   "expectedAmount": 12807.27,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-09-29",
+   "pairedTotal": 12807.26
+  },
+  {
+   "txnId": "34539",
+   "expectedAmount": 12712.65,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-10-30",
+   "pairedTotal": 12712.66
+  },
+  {
+   "txnId": "50941",
+   "expectedAmount": 12650.65,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-12-05",
+   "pairedTotal": 12650.65
+  },
+  {
+   "txnId": "44036",
+   "expectedAmount": 12452.16,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-06-20",
+   "pairedTotal": 12452.17
+  },
+  {
+   "txnId": "41000",
+   "expectedAmount": 12421.74,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-04-09",
+   "pairedTotal": 12421.74
+  },
+  {
+   "txnId": "43114",
+   "expectedAmount": 12310.29,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-05-29",
+   "pairedTotal": 12310.29
+  },
+  {
+   "txnId": "47156",
+   "expectedAmount": 12252.59,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-09-09",
+   "pairedTotal": 12252.61
+  },
+  {
+   "txnId": "41083",
+   "expectedAmount": 12235.52,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-04-11",
+   "pairedTotal": 12235.52
+  },
+  {
+   "txnId": "51539",
+   "expectedAmount": 12214,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-12-18",
+   "pairedTotal": 12214
+  },
+  {
+   "txnId": "39183",
+   "expectedAmount": 12189.29,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-02-21",
+   "pairedTotal": 12189.29
+  },
+  {
+   "txnId": "45096",
+   "expectedAmount": 12187.02,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-07-17",
+   "pairedTotal": 12187.02
+  },
+  {
+   "txnId": "47699",
+   "expectedAmount": 11989.66,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-09-15",
+   "pairedTotal": 11989.66
+  },
+  {
+   "txnId": "38148",
+   "expectedAmount": 11953.17,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-01-27",
+   "pairedTotal": 11953.16
+  },
+  {
+   "txnId": "40165",
+   "expectedAmount": 11829.75,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-03-18",
+   "pairedTotal": 11829.75
+  },
+  {
+   "txnId": "38644",
+   "expectedAmount": 11764.03,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-02-06",
+   "pairedTotal": 11764.03
+  },
+  {
+   "txnId": "35944",
+   "expectedAmount": 11672.3,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-12-02",
+   "pairedTotal": 11672.29
+  },
+  {
+   "txnId": "37987",
+   "expectedAmount": 11625.12,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-01-22",
+   "pairedTotal": 11625.12
+  },
+  {
+   "txnId": "46499",
+   "expectedAmount": 11585.09,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-08-27",
+   "pairedTotal": 11585.09
+  },
+  {
+   "txnId": "51022",
+   "expectedAmount": 11546.9,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-12-08",
+   "pairedTotal": 11546.88
+  },
+  {
+   "txnId": "45785",
+   "expectedAmount": 11518.16,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-08-06",
+   "pairedTotal": 11518.16
+  },
+  {
+   "txnId": "32155",
+   "expectedAmount": 11386.49,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-08-22",
+   "pairedTotal": 11386.49
+  },
+  {
+   "txnId": "39181",
+   "expectedAmount": 11320.53,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-02-21",
+   "pairedTotal": 11320.53
+  },
+  {
+   "txnId": "49069",
+   "expectedAmount": 11252.13,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-10-24",
+   "pairedTotal": 11252.13
+  },
+  {
+   "txnId": "42073",
+   "expectedAmount": 11100.13,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-05-06",
+   "pairedTotal": 11100.13
+  },
+  {
+   "txnId": "49036",
+   "expectedAmount": 10885.07,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-10-23",
+   "pairedTotal": 10885.07
+  },
+  {
+   "txnId": "39786",
+   "expectedAmount": 10652.2,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-03-10",
+   "pairedTotal": 10652.2
+  },
+  {
+   "txnId": "36100",
+   "expectedAmount": 10500.39,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-12-05",
+   "pairedTotal": 10500.39
+  },
+  {
+   "txnId": "42104",
+   "expectedAmount": 10487.52,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-05-06",
+   "pairedTotal": 10487.51
+  },
+  {
+   "txnId": "48024",
+   "expectedAmount": 10437.35,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-10-01",
+   "pairedTotal": 10437.35
+  },
+  {
+   "txnId": "38313",
+   "expectedAmount": 10360.58,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-01-30",
+   "pairedTotal": 10360.58
+  },
+  {
+   "txnId": "48764",
+   "expectedAmount": 10346.37,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-10-16",
+   "pairedTotal": 10346.37
+  },
+  {
+   "txnId": "41223",
+   "expectedAmount": 10082.77,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-04-15",
+   "pairedTotal": 10082.78
+  },
+  {
+   "txnId": "33872",
+   "expectedAmount": 10058.16,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-10-11",
+   "pairedTotal": 10058.16
+  },
+  {
+   "txnId": "38044",
+   "expectedAmount": 10028.89,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-01-16",
+   "pairedTotal": 10028.91
+  },
+  {
+   "txnId": "41646",
+   "expectedAmount": 9841.7,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-04-25",
+   "pairedTotal": 9841.7
+  },
+  {
+   "txnId": "51272",
+   "expectedAmount": 9697.35,
+   "pairedVendor": "Ingram Micro, Inc.",
+   "pairedDate": "2025-12-12",
+   "pairedTotal": 9697.35
+  },
+  {
+   "txnId": "34377",
+   "expectedAmount": 9631.58,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-10-25",
+   "pairedTotal": 9631.58
+  },
+  {
+   "txnId": "50137",
+   "expectedAmount": 9472.43,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-11-14",
+   "pairedTotal": 9472.46
+  },
+  {
+   "txnId": "45782",
+   "expectedAmount": 9347.62,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-08-06",
+   "pairedTotal": 9347.62
+  },
+  {
+   "txnId": "37768",
+   "expectedAmount": 9331.54,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-01-15",
+   "pairedTotal": 9331.54
+  },
+  {
+   "txnId": "51534",
+   "expectedAmount": 9268.08,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-12-18",
+   "pairedTotal": 9268.08
+  },
+  {
+   "txnId": "33799",
+   "expectedAmount": 9239.08,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-10-11",
+   "pairedTotal": 9239.07
+  },
+  {
+   "txnId": "36954",
+   "expectedAmount": 9068.9,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-12-27",
+   "pairedTotal": 9068.9
+  },
+  {
+   "txnId": "42701",
+   "expectedAmount": 8967.17,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-05-20",
+   "pairedTotal": 8967.17
+  },
+  {
+   "txnId": "50541",
+   "expectedAmount": 8958.16,
+   "pairedVendor": "Ingram Micro, Inc.",
+   "pairedDate": "2025-11-18",
+   "pairedTotal": 8958.16
+  },
+  {
+   "txnId": "43826",
+   "expectedAmount": 8843.63,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-06-16",
+   "pairedTotal": 8843.63
+  },
+  {
+   "txnId": "49586",
+   "expectedAmount": 8644.61,
+   "pairedVendor": "Ingram Micro, Inc.",
+   "pairedDate": "2025-11-04",
+   "pairedTotal": 8644.61
+  },
+  {
+   "txnId": "36509",
+   "expectedAmount": 8610.98,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-12-16",
+   "pairedTotal": 8610.98
+  },
+  {
+   "txnId": "47969",
+   "expectedAmount": 8504.74,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-09-30",
+   "pairedTotal": 8504.6
+  },
+  {
+   "txnId": "36001",
+   "expectedAmount": 8316.13,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-12-03",
+   "pairedTotal": 8316.13
+  },
+  {
+   "txnId": "49067",
+   "expectedAmount": 8254.51,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-10-24",
+   "pairedTotal": 8254.51
+  },
+  {
+   "txnId": "34851",
+   "expectedAmount": 8065.86,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-11-06",
+   "pairedTotal": 8065.87
+  },
+  {
+   "txnId": "35149",
+   "expectedAmount": 8050.24,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-11-13",
+   "pairedTotal": 8050.24
+  },
+  {
+   "txnId": "41913",
+   "expectedAmount": 7975.26,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-05-02",
+   "pairedTotal": 7975.26
+  },
+  {
+   "txnId": "33585",
+   "expectedAmount": 7737.46,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-10-09",
+   "pairedTotal": 7737.45
+  },
+  {
+   "txnId": "41996",
+   "expectedAmount": 7722.62,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-05-06",
+   "pairedTotal": 7722.62
+  },
+  {
+   "txnId": "31952",
+   "expectedAmount": 7616.97,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-08-29",
+   "pairedTotal": 7616.97
+  },
+  {
+   "txnId": "45480",
+   "expectedAmount": 7597.56,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-07-29",
+   "pairedTotal": 7596.55
+  },
+  {
+   "txnId": "36900",
+   "expectedAmount": 7526.48,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-12-24",
+   "pairedTotal": 7525.92
+  },
+  {
+   "txnId": "50246",
+   "expectedAmount": 7515.77,
+   "pairedVendor": "Ingram Micro, Inc.",
+   "pairedDate": "2025-11-19",
+   "pairedTotal": 7515.77
+  },
+  {
+   "txnId": "37278",
+   "expectedAmount": 7378.74,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-12-27",
+   "pairedTotal": 7378.74
+  },
+  {
+   "txnId": "38146",
+   "expectedAmount": 7204.58,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-12-23",
+   "pairedTotal": 7325.08
+  },
+  {
+   "txnId": "36580",
+   "expectedAmount": 7144.09,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-12-17",
+   "pairedTotal": 7144.12
+  },
+  {
+   "txnId": "44912",
+   "expectedAmount": 7013.6,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-07-14",
+   "pairedTotal": 7013.6
+  },
+  {
+   "txnId": "31465",
+   "expectedAmount": 6980.34,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-08-20",
+   "pairedTotal": 6980.34
+  },
+  {
+   "txnId": "39713",
+   "expectedAmount": 6946.68,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-03-06",
+   "pairedTotal": 6946.68
+  },
+  {
+   "txnId": "32257",
+   "expectedAmount": 6935.14,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-09-06",
+   "pairedTotal": 6935.14
+  },
+  {
+   "txnId": "32150",
+   "expectedAmount": 6902.2,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-08-22",
+   "pairedTotal": 6902.2
+  },
+  {
+   "txnId": "51635",
+   "expectedAmount": 6859.09,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-12-19",
+   "pairedTotal": 6859.09
+  },
+  {
+   "txnId": "50475",
+   "expectedAmount": 6841.29,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-11-25",
+   "pairedTotal": 6841.29
+  },
+  {
+   "txnId": "50737",
+   "expectedAmount": 6839.98,
+   "pairedVendor": "Ingram Micro, Inc.",
+   "pairedDate": "2025-11-30",
+   "pairedTotal": 6839.98
+  },
+  {
+   "txnId": "45167",
+   "expectedAmount": 6784.43,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-07-18",
+   "pairedTotal": 6784.43
+  },
+  {
+   "txnId": "45533",
+   "expectedAmount": 6007.61,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-07-30",
+   "pairedTotal": 6007.61
+  },
+  {
+   "txnId": "34430",
+   "expectedAmount": 5997.39,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-10-28",
+   "pairedTotal": 5997.39
+  },
+  {
+   "txnId": "45895",
+   "expectedAmount": 5865.9,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-08-07",
+   "pairedTotal": 5865.91
+  },
+  {
+   "txnId": "33846",
+   "expectedAmount": 5821.54,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-10-14",
+   "pairedTotal": 5821.54
+  },
+  {
+   "txnId": "36300",
+   "expectedAmount": 5767.6,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-12-11",
+   "pairedTotal": 5767.6
+  },
+  {
+   "txnId": "44978",
+   "expectedAmount": 5710.98,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-07-15",
+   "pairedTotal": 5710.98
+  },
+  {
+   "txnId": "47527",
+   "expectedAmount": 5574.35,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-09-19",
+   "pairedTotal": 5574.35
+  },
+  {
+   "txnId": "49987",
+   "expectedAmount": 5336.53,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-11-17",
+   "pairedTotal": 5336.53
+  },
+  {
+   "txnId": "49382",
+   "expectedAmount": 5086.2,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-10-31",
+   "pairedTotal": 5086.2
+  },
+  {
+   "txnId": "37213",
+   "expectedAmount": 4967.86,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-12-27",
+   "pairedTotal": 4967.85
+  },
+  {
+   "txnId": "49973",
+   "expectedAmount": 4883.68,
+   "pairedVendor": "Ingram Micro, Inc.",
+   "pairedDate": "2025-11-12",
+   "pairedTotal": 4883.68
+  },
+  {
+   "txnId": "48161",
+   "expectedAmount": 4865.59,
+   "pairedVendor": "Ingram Micro, Inc.",
+   "pairedDate": "2025-10-02",
+   "pairedTotal": 4865.59
+  },
+  {
+   "txnId": "47155",
+   "expectedAmount": 4776.32,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-09-09",
+   "pairedTotal": 4776.32
+  },
+  {
+   "txnId": "48313",
+   "expectedAmount": 4753.91,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-10-08",
+   "pairedTotal": 4753.91
+  },
+  {
+   "txnId": "50201",
+   "expectedAmount": 4720.96,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-11-18",
+   "pairedTotal": 4720.96
+  },
+  {
+   "txnId": "36047",
+   "expectedAmount": 4625.97,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-12-04",
+   "pairedTotal": 4625.96
+  },
+  {
+   "txnId": "51629",
+   "expectedAmount": 4612.72,
+   "pairedVendor": "Ingram Micro, Inc.",
+   "pairedDate": "2025-12-18",
+   "pairedTotal": 4612.72
+  },
+  {
+   "txnId": "37594",
+   "expectedAmount": 4493.2,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-01-13",
+   "pairedTotal": 4493.21
+  },
+  {
+   "txnId": "50543",
+   "expectedAmount": 4434.09,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-11-18",
+   "pairedTotal": 4434.09
+  },
+  {
+   "txnId": "35265",
+   "expectedAmount": 4358.99,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-11-15",
+   "pairedTotal": 4358.99
+  },
+  {
+   "txnId": "48021",
+   "expectedAmount": 4330.01,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-10-02",
+   "pairedTotal": 4330.01
+  },
+  {
+   "txnId": "43828",
+   "expectedAmount": 4196.27,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-06-16",
+   "pairedTotal": 4196.27
+  },
+  {
+   "txnId": "45211",
+   "expectedAmount": 4190.82,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-07-21",
+   "pairedTotal": 4190.82
+  },
+  {
+   "txnId": "36837",
+   "expectedAmount": 4154.07,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-12-23",
+   "pairedTotal": 4154.07
+  },
+  {
+   "txnId": "44716",
+   "expectedAmount": 4070.56,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-07-10",
+   "pairedTotal": 4070.56
+  },
+  {
+   "txnId": "51113",
+   "expectedAmount": 4032.65,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-12-10",
+   "pairedTotal": 4032.65
+  },
+  {
+   "txnId": "49992",
+   "expectedAmount": 4001.88,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-11-13",
+   "pairedTotal": 4001.88
+  },
+  {
+   "txnId": "43963",
+   "expectedAmount": 3908.05,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-06-18",
+   "pairedTotal": 3908.04
+  },
+  {
+   "txnId": "50350",
+   "expectedAmount": 3827.67,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-11-21",
+   "pairedTotal": 3827.67
+  },
+  {
+   "txnId": "51974",
+   "expectedAmount": 3826,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-12-22",
+   "pairedTotal": 3826
+  },
+  {
+   "txnId": "48654",
+   "expectedAmount": 3728.37,
+   "pairedVendor": "Ingram Micro, Inc.",
+   "pairedDate": "2025-10-15",
+   "pairedTotal": 3728.37
+  },
+  {
+   "txnId": "35387",
+   "expectedAmount": 3557.55,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-11-19",
+   "pairedTotal": 3557.55
+  },
+  {
+   "txnId": "41887",
+   "expectedAmount": 3340.32,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-05-01",
+   "pairedTotal": 3340.32
+  },
+  {
+   "txnId": "48476",
+   "expectedAmount": 3334.5,
+   "pairedVendor": "Ingram Micro, Inc.",
+   "pairedDate": "2025-10-10",
+   "pairedTotal": 3334.5
+  },
+  {
+   "txnId": "41688",
+   "expectedAmount": 3214.08,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-04-28",
+   "pairedTotal": 3214.07
+  },
+  {
+   "txnId": "49862",
+   "expectedAmount": 3032.54,
+   "pairedVendor": "Ingram Micro, Inc.",
+   "pairedDate": "2025-11-07",
+   "pairedTotal": 3032.54
+  },
+  {
+   "txnId": "42900",
+   "expectedAmount": 3007.86,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-05-27",
+   "pairedTotal": 3007.86
+  },
+  {
+   "txnId": "45676",
+   "expectedAmount": 2937.62,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-08-05",
+   "pairedTotal": 2937.6
+  },
+  {
+   "txnId": "49974",
+   "expectedAmount": 2834.88,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-11-12",
+   "pairedTotal": 2834.88
+  },
+  {
+   "txnId": "50793",
+   "expectedAmount": 2664.78,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-12-04",
+   "pairedTotal": 2664.78
+  },
+  {
+   "txnId": "34871",
+   "expectedAmount": 2605.04,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-11-07",
+   "pairedTotal": 2605.04
+  },
+  {
+   "txnId": "49073",
+   "expectedAmount": 2485.68,
+   "pairedVendor": "Ingram Micro, Inc.",
+   "pairedDate": "2025-10-23",
+   "pairedTotal": 2485.68
+  },
+  {
+   "txnId": "49387",
+   "expectedAmount": 2389.55,
+   "pairedVendor": "Ingram Micro, Inc.",
+   "pairedDate": "2025-10-31",
+   "pairedTotal": 2389.55
+  },
+  {
+   "txnId": "46628",
+   "expectedAmount": 2220.94,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-08-27",
+   "pairedTotal": 2220.94
+  },
+  {
+   "txnId": "34043",
+   "expectedAmount": 2217.09,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-10-21",
+   "pairedTotal": 2217.05
+  },
+  {
+   "txnId": "34371",
+   "expectedAmount": 2165.8,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-10-25",
+   "pairedTotal": 2165.8
+  },
+  {
+   "txnId": "49386",
+   "expectedAmount": 2164.3,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-10-31",
+   "pairedTotal": 2164.3
+  },
+  {
+   "txnId": "33848",
+   "expectedAmount": 2100.26,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-10-08",
+   "pairedTotal": 2100.26
+  },
+  {
+   "txnId": "47416",
+   "expectedAmount": 2092.85,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-09-17",
+   "pairedTotal": 2092.85
+  },
+  {
+   "txnId": "51415",
+   "expectedAmount": 1830.28,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-12-16",
+   "pairedTotal": 1830.28
+  },
+  {
+   "txnId": "35155",
+   "expectedAmount": 1814.6,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-11-13",
+   "pairedTotal": 1814.6
+  },
+  {
+   "txnId": "41001",
+   "expectedAmount": 1792.5,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-04-09",
+   "pairedTotal": 1792.5
+  },
+  {
+   "txnId": "37275",
+   "expectedAmount": 1693.95,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-12-23",
+   "pairedTotal": 1689.95
+  },
+  {
+   "txnId": "42993",
+   "expectedAmount": 1683.57,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-05-28",
+   "pairedTotal": 1683.87
+  },
+  {
+   "txnId": "44113",
+   "expectedAmount": 1602.82,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-06-24",
+   "pairedTotal": 1602.8
+  },
+  {
+   "txnId": "35857",
+   "expectedAmount": 1557.43,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-11-27",
+   "pairedTotal": 1557.43
+  },
+  {
+   "txnId": "32417",
+   "expectedAmount": 1541.74,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-09-12",
+   "pairedTotal": 1541.74
+  },
+  {
+   "txnId": "37819",
+   "expectedAmount": 1370.55,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-01-16",
+   "pairedTotal": 1370.55
+  },
+  {
+   "txnId": "50932",
+   "expectedAmount": 1328.01,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-12-05",
+   "pairedTotal": 1328.01
+  },
+  {
+   "txnId": "50038",
+   "expectedAmount": 1299.46,
+   "pairedVendor": "Ingram Micro, Inc.",
+   "pairedDate": "2025-11-19",
+   "pairedTotal": 1299.46
+  },
+  {
+   "txnId": "38639",
+   "expectedAmount": 1188.43,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-02-06",
+   "pairedTotal": 1188.45
+  },
+  {
+   "txnId": "37531",
+   "expectedAmount": 1183.36,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-01-10",
+   "pairedTotal": 1183.36
+  },
+  {
+   "txnId": "48580",
+   "expectedAmount": 1171.16,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-10-14",
+   "pairedTotal": 1171.16
+  },
+  {
+   "txnId": "42791",
+   "expectedAmount": 1160.28,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-05-20",
+   "pairedTotal": 1160.28
+  },
+  {
+   "txnId": "39409",
+   "expectedAmount": 1136.48,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-02-27",
+   "pairedTotal": 1136.48
+  },
+  {
+   "txnId": "36455",
+   "expectedAmount": 1072.13,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-12-13",
+   "pairedTotal": 1072.12
+  },
+  {
+   "txnId": "39560",
+   "expectedAmount": 960.55,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-03-03",
+   "pairedTotal": 948.84
+  },
+  {
+   "txnId": "46239",
+   "expectedAmount": 914.67,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-08-14",
+   "pairedTotal": 914.67
+  },
+  {
+   "txnId": "33009",
+   "expectedAmount": 844.58,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-10-01",
+   "pairedTotal": 844.58
+  },
+  {
+   "txnId": "40319",
+   "expectedAmount": 826.08,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-03-21",
+   "pairedTotal": 826.09
+  },
+  {
+   "txnId": "37890",
+   "expectedAmount": 700.15,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-01-22",
+   "pairedTotal": 700.15
+  },
+  {
+   "txnId": "36254",
+   "expectedAmount": 652.47,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-12-10",
+   "pairedTotal": 652.47
+  },
+  {
+   "txnId": "51118",
+   "expectedAmount": 607.59,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2025-12-10",
+   "pairedTotal": 607.59
+  },
+  {
+   "txnId": "50351",
+   "expectedAmount": 519.4,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-11-21",
+   "pairedTotal": 519.4
+  },
+  {
+   "txnId": "50403",
+   "expectedAmount": 441.65,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-11-24",
+   "pairedTotal": 441.65
+  },
+  {
+   "txnId": "35493",
+   "expectedAmount": 428.34,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-11-21",
+   "pairedTotal": 428.31
+  },
+  {
+   "txnId": "37218",
+   "expectedAmount": 393.89,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-12-27",
+   "pairedTotal": 393.89
+  },
+  {
+   "txnId": "49587",
+   "expectedAmount": 363.86,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-11-04",
+   "pairedTotal": 363.86
+  },
+  {
+   "txnId": "42071",
+   "expectedAmount": 347.97,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-05-06",
+   "pairedTotal": 347.97
+  },
+  {
+   "txnId": "42991",
+   "expectedAmount": 339.37,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-05-28",
+   "pairedTotal": 339.37
+  },
+  {
+   "txnId": "36394",
+   "expectedAmount": 322.71,
+   "pairedVendor": "Sony-TD Synnex",
+   "pairedDate": "2024-12-12",
+   "pairedTotal": 322.71
+  },
+  {
+   "txnId": "41644",
+   "expectedAmount": 253.07,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-04-25",
+   "pairedTotal": 253.07
+  },
+  {
+   "txnId": "40471",
+   "expectedAmount": 240,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2025-03-27",
+   "pairedTotal": 240
+  },
+  {
+   "txnId": "41437",
+   "expectedAmount": 139.2,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2025-04-22",
+   "pairedTotal": 139.21
+  },
+  {
+   "txnId": "35489",
+   "expectedAmount": 40.16,
+   "pairedVendor": "Canon USA, Inc.",
+   "pairedDate": "2024-11-20",
+   "pairedTotal": 40.16
+  },
+  {
+   "txnId": "34483",
+   "expectedAmount": 8369.85,
+   "pairedVendor": "Nikon Inc.",
+   "pairedDate": "2024-10-16",
+   "pairedTotal": 8369.86
+  }
+ ]
+}
