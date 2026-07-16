@@ -94,6 +94,20 @@ export async function runSync(full: boolean): Promise<string> {
         txns = await api.queryChangedSince!(entity, since);
       }
       const n = await upsertTxns(entity, txns);
+      // Hard deletes leave no trace for incremental sync; a full pull is the
+      // complete truth for the window, so purge mirror rows QBO no longer has
+      // (otherwise deleted transactions keep counting — bit us during the ACH
+      // cleanup when deleted feed expenses lingered in the mirror).
+      if (doFull) {
+        const freshIds = txns.map((t) => String(t.Id));
+        const res = await getPool().query(
+          `DELETE FROM qbo_txns
+           WHERE entity_type = $1 AND txn_date >= $2 AND txn_date <= $3
+             AND NOT (id = ANY($4))`,
+          [entity, SYNC_START, today, freshIds]
+        );
+        if (res.rowCount) counts.push(`${entity}-purged:${res.rowCount}`);
+      }
       counts.push(`${entity}:${n}`);
     }
     counts.push(`Account:${await syncAccounts(api)}`);
