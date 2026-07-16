@@ -44,6 +44,7 @@
       <button class="btn primary" id="bRun25">Reclassify next 25</button>
       <button class="btn primary" id="bRun100">Reclassify next 100</button>
     </div>
+    <div id="taskInfo" style="color:var(--ink-2);font-size:13px;margin:4px 0 0">—</div>
     <div class="res" id="res" style="display:none"></div>
   </div>
 
@@ -61,8 +62,10 @@
 let busy=false;
 function task(){return $('task').value;}
 async function status(){
+  $('taskInfo').textContent='Loading task status…';
   try{
     const d=await jfetch('/api/reclassify/status?task='+encodeURIComponent(task()));
+    $('taskInfo').textContent='Task “'+$('task').selectedOptions[0].text+'”: '+d.beltTotal+' rows on the manifest · '+d.pending+' pending ('+usd2.format(d.pendingAmount)+') · '+d.done+' done';
     $('kPend').textContent=d.pending;
     $('kPendAmt').textContent=usd2.format(d.pendingAmount)+' still to move';
     $('kDone').textContent=d.done+' of '+d.beltTotal;
@@ -82,8 +85,13 @@ function show(rows){
     box.appendChild(div);
   }
 }
+function setBusy(b,msg){
+  busy=b;
+  ['bDry','bRun25','bRun100','bRev'].forEach(function(id){$(id).disabled=b;$(id).style.opacity=b?0.5:1;});
+  if(b){const box=$('res');box.style.display='';box.innerHTML='<div>⏳ '+msg+' — talking to QuickBooks, this takes a few seconds per transaction…</div>';}
+}
 async function run(limit,dry){
-  if(busy)return; busy=true; setLoading(true);
+  if(busy)return; setBusy(true, dry?'Dry run started':'Reclassifying');
   try{
     const res=await fetch('/api/reclassify/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({limit:limit,dryRun:dry,task:task()})});
     const d=await res.json();
@@ -91,7 +99,7 @@ async function run(limit,dry){
     showBanner((dry?'<strong>Dry run:</strong> ':'<strong>Done:</strong> ')+d.succeeded+' of '+d.attempted+' · '+usd2.format(d.amount));
     show(d.results); status();
   }catch(e){showBanner('<strong>Error.</strong> '+escapeHtml(e.message));}
-  finally{busy=false; setLoading(false);}
+  finally{setBusy(false,'');}
 }
 $('task').addEventListener('change',()=>{$('res').style.display='none';status();});
 $('bDry').addEventListener('click',()=>run(25,true));

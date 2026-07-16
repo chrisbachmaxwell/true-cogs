@@ -1,6 +1,6 @@
 {
  "description": "2023 Utah tax remittances mis-filed in 66000 Payroll Expenses (Chris scoped automation to 2023 only, 2026-07-16). Big month-end payments -> Sales Tax Payable 21900 per his Option-1 decision; small monthly -> State Tax W/H Payable. All judgment rows absent.",
- "from": "66000 Payroll Expenses",
+ "from": "66000",
  "rows": [
   {
    "txnId": "8677",
