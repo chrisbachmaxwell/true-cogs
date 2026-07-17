@@ -1783,6 +1783,41 @@ app.get(
   })
 );
 
+/** The books' accrual P&L, sectioned — read-only diagnostic for comparing the
+ * app's cash-verified statement against what QuickBooks itself reports. */
+app.get(
+  '/api/books-pnl',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const range = validDateRange(req, res);
+    if (!range) return;
+    const api = await createQboApi();
+    const report = await api.profitAndLoss(range.start, range.end);
+    const sections: Record<string, { total: number; rows: { name: string; amount: number; id: string | null }[] }> = {};
+    const walk = (rows: any, section: string | null) => {
+      for (const row of rows?.Row || []) {
+        const header = row.Header?.ColData?.[0]?.value || '';
+        const sec = section ?? (header || null);
+        if (row.Summary && header && !section) {
+          sections[header] = sections[header] || { total: 0, rows: [] };
+          sections[header].total = Number(row.Summary.ColData?.[1]?.value) || 0;
+        }
+        const col = row.ColData;
+        if (section && col?.length >= 2 && col[0]?.value) {
+          const amt = Number(col[col.length - 1]?.value);
+          if (!Number.isNaN(amt) && amt !== 0) {
+            sections[section] = sections[section] || { total: 0, rows: [] };
+            sections[section].rows.push({ name: col[0].value, amount: amt, id: col[0].id ?? null });
+          }
+        }
+        if (row.Rows) walk(row.Rows, sec);
+      }
+    };
+    walk(report?.Rows, null);
+    res.json({ start: range.start, end: range.end, basis: 'accrual (as QuickBooks reports it)', sections });
+  })
+);
+
 app.get(
   '/api/accounts',
   requireAuth,
