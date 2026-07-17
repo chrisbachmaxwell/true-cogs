@@ -1791,6 +1791,43 @@ app.get(
       link: `/pnl?${qs}`,
     });
 
+    // 10 — every payment record is internally consistent: the bill lines'
+    // covered amounts must equal actual cash + applied credits. This is the
+    // data shape the cash-only COGS rule (D33) rests on; if the bookkeepers
+    // ever record payments differently, this check catches it immediately.
+    try {
+      const api = await getComputeApi();
+      let violations = 0;
+      let mismatch = 0;
+      let paymentsChecked = 0;
+      for (const bp of await api.queryByDateRange('BillPayment', range.start, range.end)) {
+        let coverage = 0;
+        let credits = 0;
+        for (const line of bp.Line || []) {
+          const linked: any[] = line.LinkedTxn || [];
+          if (linked.some((t) => t.TxnType === 'VendorCredit')) credits += Number(line.Amount) || 0;
+          else if (linked.some((t) => t.TxnType === 'Bill')) coverage += Number(line.Amount) || 0;
+        }
+        if (coverage === 0) continue;
+        paymentsChecked++;
+        const gap = Math.abs(coverage - credits - (Number(bp.TotalAmt) || 0));
+        if (gap > 0.02) { violations++; mismatch += gap; }
+      }
+      mismatch = Math.round(mismatch * 100) / 100;
+      add({
+        id: 'payment-line-identity',
+        name: 'Every bill payment audits clean: covered amounts = cash + credits',
+        status: mismatch <= 500 ? (violations === 0 ? 'pass' : 'warn') : mismatch <= 10000 ? 'warn' : 'fail',
+        expected: `${paymentsChecked} payments, $0.00 mismatch`,
+        actual: violations === 0 ? `${paymentsChecked} payments, all clean` : `${violations} payment(s) off by $${mismatch.toFixed(2)} total`,
+        explain:
+          'The cash-only COGS rule reads each payment as: bill coverage = actual cash + applied credits. A mismatch means a payment was recorded in a shape the engine doesn’t expect — its cost attribution could be off by the mismatch amount.',
+        link: `/pnl?${qs}`,
+      });
+    } catch (err: any) {
+      console.warn('[checks] payment-line-identity unavailable:', err.message);
+    }
+
     const counts = {
       pass: checks.filter((c) => c.status === 'pass').length,
       warn: checks.filter((c) => c.status === 'warn').length,
