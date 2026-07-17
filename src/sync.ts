@@ -161,6 +161,12 @@ export function makeLocalApi(remote: QboApi): QboApi {
       return bill;
     },
     getInvoice: (id) => remote.getInvoice(id),
+    async getPurchase(id: string) {
+      const res = await db.query(`SELECT data FROM qbo_txns WHERE entity_type = 'Purchase' AND id = $1`, [id]);
+      if (res.rows.length) return res.rows[0].data;
+      if (!remote.getPurchase) throw new Error('Purchase not found in mirror');
+      return remote.getPurchase(id);
+    },
     async listAccounts() {
       const res = await db.query(`SELECT data FROM qbo_txns WHERE entity_type = 'Account'`);
       if (res.rows.length) return res.rows.map((r) => r.data);
