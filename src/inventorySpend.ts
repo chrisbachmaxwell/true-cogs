@@ -339,6 +339,9 @@ export async function computePurchasesSettled(
   const cashByBill = new Map<string, number>();
   for (const bp of await api.queryByDateRange('BillPayment', range.start, today)) {
     for (const line of bp.Line || []) {
+      // A credit-application line links BOTH the VendorCredit and the Bill it
+      // pays down — that's credit coverage, not cash. Same precedence as bucket 1.
+      if ((line.LinkedTxn || []).some((t: any) => t.TxnType === 'VendorCredit')) continue;
       const linked = (line.LinkedTxn || []).find((t: any) => t.TxnType === 'Bill');
       if (!linked) continue;
       cashByBill.set(String(linked.TxnId), (cashByBill.get(String(linked.TxnId)) || 0) + (Number(line.Amount) || 0));

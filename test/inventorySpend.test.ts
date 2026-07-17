@@ -392,3 +392,25 @@ test('purchases settled: each bill counts at what we paid for it, on its date', 
   assert.equal(b10?.amount, 70);
   assert.equal(b10?.date, '2026-06-03'); // bill date, not payment date
 });
+
+test('purchases settled: credit-application lines (linked to both credit and bill) are not cash', async () => {
+  const api = mockApi({
+    billsInMonth: [
+      { Id: 'B20', TxnDate: '2026-06-03', TotalAmt: 100, Balance: 0, VendorRef: { name: 'Canon' }, Line: [expenseLine(MAT_INV, 100)] },
+    ],
+    billPayments: [
+      {
+        Id: 'BP20', TxnDate: '2026-06-20',
+        Line: [
+          { Amount: 70, LinkedTxn: [{ TxnType: 'Bill', TxnId: 'B20' }] },
+          // $30 credit applied to the same bill — links both docs; NOT cash.
+          { Amount: 30, LinkedTxn: [{ TxnType: 'VendorCredit', TxnId: 'VC20' }, { TxnType: 'Bill', TxnId: 'B20' }] },
+        ],
+      },
+    ],
+  });
+  const { computePurchasesSettled } = await import('../src/inventorySpend');
+  const r = await computePurchasesSettled(api, MAT_INV, { start: '2026-06-01', end: '2026-06-30' }, '2026-07-17');
+  assert.equal(r.billedNet, 70);
+  assert.equal(r.creditsNetted, 30);
+});
