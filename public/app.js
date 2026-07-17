@@ -56,18 +56,38 @@ function applyPreset(p) {
   Range.set(start, end);
 }
 
+/* Year + period → {start, end}. Period: full, h1, h2, q1..q4. */
+const FIRST_DATA_YEAR = 2020;
+function periodRange(year, period) {
+  const spans = {
+    full: ['01-01', '12-31'], h1: ['01-01', '06-30'], h2: ['07-01', '12-31'],
+    q1: ['01-01', '03-31'], q2: ['04-01', '06-30'], q3: ['07-01', '09-30'], q4: ['10-01', '12-31'],
+  };
+  const s = spans[period] || spans.full;
+  let end = year + '-' + s[1];
+  if (end > todayISO()) end = todayISO(); // current year: don't run into the future
+  return { start: year + '-' + s[0], end };
+}
+const PERIOD_NAMES = { full: 'Full year', h1: 'First half', h2: 'Second half', q1: 'Q1', q2: 'Q2', q3: 'Q3', q4: 'Q4' };
+
 /* Renders the shared range control into #rangeBox and wires onChange. */
 function mountRange(onChange) {
   const box = $('rangeBox');
   box.className = 'range';
+  const thisYear = Number(todayISO().slice(0, 4));
+  let yearOpts = '<option value="">Year…</option>';
+  for (let y = thisYear; y >= FIRST_DATA_YEAR; y--) yearOpts += '<option value="' + y + '">' + y + '</option>';
+  let periodOpts = '';
+  for (const k of ['full', 'h1', 'h2', 'q1', 'q2', 'q3', 'q4']) periodOpts += '<option value="' + k + '">' + PERIOD_NAMES[k] + '</option>';
   box.innerHTML =
+    '<select id="rrYear" title="Pick a year">' + yearOpts + '</select>' +
+    '<select id="rrPeriod" title="Pick the part of the year">' + periodOpts + '</select>' +
     '<select id="rrPreset">' +
       '<option value="custom">Custom</option>' +
       '<option value="this">This month</option>' +
       '<option value="last">Last month</option>' +
       '<option value="l3">Last 3 months</option>' +
       '<option value="ytd">Year to date</option>' +
-      '<option value="h1">H1 (Jan 1 – Jun 30)</option>' +
       '<option value="t12">Trailing 12 months</option>' +
     '</select>' +
     '<input type="date" id="rrStart"><span class="arrow">→</span><input type="date" id="rrEnd">' +
@@ -77,18 +97,39 @@ function mountRange(onChange) {
   $('rrStart').value = r.start;
   $('rrEnd').value = r.end;
   const fire = (force) => { $('rangeLabel') && ($('rangeLabel').textContent = Range.label()); onChange(force === true); };
+  const syncInputs = () => { const nr = Range.get(); $('rrStart').value = nr.start; $('rrEnd').value = nr.end; };
+  const applyYearPeriod = () => {
+    const y = $('rrYear').value;
+    if (!y) return;
+    const p = periodRange(Number(y), $('rrPeriod').value);
+    Range.set(p.start, p.end);
+    $('rrPreset').value = 'custom';
+    syncInputs();
+    fire();
+  };
+  // Reflect the current range in the year/period selects when it matches one.
+  (function preselect() {
+    const yr = r.start.slice(0, 4);
+    if (r.end.slice(0, 4) !== yr) return;
+    for (const k of Object.keys(PERIOD_NAMES)) {
+      const p = periodRange(Number(yr), k);
+      if (p.start === r.start && p.end === r.end) { $('rrYear').value = yr; $('rrPeriod').value = k; return; }
+    }
+  })();
+  $('rrYear').addEventListener('change', applyYearPeriod);
+  $('rrPeriod').addEventListener('change', applyYearPeriod);
   $('rrPreset').addEventListener('change', () => {
     if ($('rrPreset').value !== 'custom') {
       applyPreset($('rrPreset').value);
-      const nr = Range.get();
-      $('rrStart').value = nr.start;
-      $('rrEnd').value = nr.end;
+      $('rrYear').value = '';
+      syncInputs();
       fire();
     }
   });
   for (const id of ['rrStart', 'rrEnd']) {
     $(id).addEventListener('change', () => {
       $('rrPreset').value = 'custom';
+      $('rrYear').value = '';
       const s = $('rrStart').value, e = $('rrEnd').value;
       if (s && e && s <= e) { Range.set(s, e); fire(); }
     });

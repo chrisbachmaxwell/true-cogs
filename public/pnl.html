@@ -36,6 +36,10 @@
   <div class="banner" id="banner"></div>
 
   <div class="card" style="margin-top:22px">
+    <div style="display:flex;justify-content:flex-end;margin-bottom:6px">
+      <select id="cmpYear" style="font:inherit;font-size:13px;padding:6px 9px;border-radius:9px;border:1px solid var(--hairline);color:var(--ink);background:var(--surface)"></select>
+    </div>
+    <div id="cmpCard" style="display:none;margin-bottom:16px"></div>
     <div class="stmt" id="stmt"><div class="empty">Loading…</div></div>
     <div class="warnings" id="warnings"></div>
   </div>
@@ -317,13 +321,88 @@ function downloadCsv() {
   URL.revokeObjectURL(a.href);
 }
 
+// ---- side-by-side comparison with the same period of another year ----
+function cmpSetup() {
+  const sel = $('cmpYear');
+  const thisYear = Number(todayISO().slice(0, 4));
+  let h = '<option value="">Compare: off</option>';
+  for (let y = thisYear; y >= FIRST_DATA_YEAR; y--) h += '<option value="' + y + '">vs ' + y + '</option>';
+  sel.innerHTML = h;
+  sel.value = new URLSearchParams(location.search).get('cmp') || '';
+  sel.addEventListener('change', () => {
+    const p = new URLSearchParams(location.search);
+    if (sel.value) p.set('cmp', sel.value); else p.delete('cmp');
+    history.replaceState(null, '', location.pathname + '?' + p.toString());
+    load();
+  });
+}
+function shiftRangeToYear(r, year) {
+  const delta = year - Number(r.start.slice(0, 4));
+  const shift = (d) => {
+    let s = (Number(d.slice(0, 4)) + delta) + d.slice(4);
+    if (s.slice(5) === '02-29') s = s.slice(0, 5) + '02-28';
+    return s;
+  };
+  let end = shift(r.end);
+  if (end > todayISO()) end = todayISO();
+  return { start: shift(r.start), end };
+}
+function renderCompare(a, b, labelA, labelB) {
+  const pick = (d) => ({
+    revenue: d.income.netRevenue,
+    cogs: d.adjusted ? d.adjusted.cogsTotal : d.cogs.total,
+    gp: d.adjusted ? d.adjusted.grossProfit : d.grossProfit,
+    gpPct: d.adjusted ? d.adjusted.grossMarginPct : d.grossMarginPct,
+    expenses: d.expenses.net,
+    noi: d.adjusted ? d.adjusted.noi : d.noi,
+    basis: d.adjusted ? 'accounting' : 'cash',
+  });
+  const A = pick(a), B = pick(b);
+  const money = (v) => usd.format(v);
+  const line = (name, va, vb, pct) => {
+    const diff = va - vb;
+    const dPct = vb !== 0 ? (diff / Math.abs(vb)) * 100 : null;
+    return '<tr><td>' + name + '</td><td class="num">' + (pct ? (va == null ? '—' : va.toFixed(1) + '%') : money(va)) +
+      '</td><td class="num">' + (pct ? (vb == null ? '—' : vb.toFixed(1) + '%') : money(vb)) +
+      '</td><td class="num" style="color:' + (diff >= 0 ? 'var(--good, #34c759)' : 'var(--bad)') + '">' +
+      (pct ? ((va == null || vb == null) ? '—' : (diff >= 0 ? '+' : '') + diff.toFixed(1) + ' pts')
+           : (diff >= 0 ? '+' : '') + money(diff) + (dPct === null ? '' : ' (' + (dPct >= 0 ? '+' : '') + dPct.toFixed(1) + '%)')) +
+      '</td></tr>';
+  };
+  $('cmpCard').innerHTML =
+    '<div style="overflow-x:auto"><table>' +
+    '<thead><tr><th></th><th class="num">' + labelA + '</th><th class="num">' + labelB + '</th><th class="num">Change</th></tr></thead><tbody>' +
+    line('Net revenue', A.revenue, B.revenue) +
+    line('COGS', A.cogs, B.cogs) +
+    line('Gross profit', A.gp, B.gp) +
+    line('Gross margin', A.gpPct, B.gpPct, true) +
+    line('Expenses', A.expenses, B.expenses) +
+    line('Net operating income', A.noi, B.noi) +
+    '</tbody></table></div>' +
+    (A.basis !== B.basis ? '<div class="dnote">Note: one side lacks inventory counts, so it shows the cash basis.</div>' : '');
+  $('cmpCard').style.display = '';
+}
+
 async function load(force) {
   const fresh = staleGuard();
   setLoading(true);
   try {
-    const d = await jfetch('/api/pnl-statement?' + Range.qs() + (force ? '&refresh=1' : ''));
+    const cmpYear = $('cmpYear') ? $('cmpYear').value : '';
+    const r = Range.get();
+    const wantCmp = cmpYear && Number(cmpYear) !== Number(r.start.slice(0, 4));
+    const cmpRange = wantCmp ? shiftRangeToYear(r, Number(cmpYear)) : null;
+    const [d, dCmp] = await Promise.all([
+      jfetch('/api/pnl-statement?' + Range.qs() + (force ? '&refresh=1' : '')),
+      cmpRange ? jfetch('/api/pnl-statement?start=' + cmpRange.start + '&end=' + cmpRange.end).catch(() => null) : Promise.resolve(null),
+    ]);
     if (!fresh()) return;
     stmtData = d;
+    if (dCmp) {
+      const fmt = (x) => new Date(x + 'T00:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+      renderCompare(d, dCmp, fmt(d.start) + ' – ' + fmt(d.end), fmt(dCmp.start) + ' – ' + fmt(dCmp.end));
+    } else {
+      $('cmpCard').style.display = 'none';
+    }
     let h = '';
     h += '<div class="section">Income</div>';
     h += row('Money in — bank-verified customer cash', d.income.moneyIn);
@@ -361,6 +440,19 @@ async function load(force) {
       const div = document.createElement('div');
       div.textContent = '⚠ ' + warn;
       w.appendChild(div);
+    }
+    // Timing context: cost lands when bills are PAID (Chris's rule), so when
+    // billed and paid amounts differ a lot in a range, say so plainly.
+    if (d.cogs.bookedReference) {
+      const gap = d.cogs.bookedReference - d.cogs.inventoryCash;
+      if (Math.abs(gap) > 100000) {
+        const div = document.createElement('div');
+        div.textContent = 'ℹ Bills received in this range total ' + usd.format(d.cogs.bookedReference) +
+          ' vs ' + usd.format(d.cogs.inventoryCash) + ' cash paid. Cost follows the payment date (your rule), so ' +
+          usd.format(Math.abs(gap)) + ' of cost ' + (gap > 0 ? 'will land when those bills get paid' : 'in this range belongs to bills from an earlier period') +
+          ' — profit shifts between periods by timing and smooths out over longer ranges.';
+        w.appendChild(div);
+      }
     }
     const rows = $('expRows');
     rows.innerHTML = '';
@@ -418,6 +510,7 @@ async function saveCount() {
 }
 
 async function init() {
+  cmpSetup();
   mountRange((force) => { $('detailCard').style.display = 'none'; dState = null; detailSeq++; load(force); });
   $('icSave').addEventListener('click', saveCount);
   $('dClose').addEventListener('click', () => { $('detailCard').style.display = 'none'; dState = null; detailSeq++; });
