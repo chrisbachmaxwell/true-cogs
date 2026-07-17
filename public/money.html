@@ -6,19 +6,48 @@
 <title>Where the Money Went · Pictureline</title>
 <link rel="stylesheet" href="/theme.css">
 <style>
+  /* viz roles — light, then dark under the same media query theme.css uses */
+  :root{
+    --viz-bank:#2a78d6; --viz-inv:#008300; --viz-own:#e87ba4; --viz-cap:#eda100;
+    --viz-fin:#1baf7a; --viz-oth:#eb6834; --viz-total:#8e8e93; --viz-warn:#fab219;
+    --viz-grid:#e5e5ea; --viz-ink:#1d1d1f; --viz-ink2:#6e6e73;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --viz-bank:#3987e5; --viz-inv:#008300; --viz-own:#d55181; --viz-cap:#c98500;
+      --viz-fin:#199e70; --viz-oth:#d95926; --viz-total:#8e8e93; --viz-warn:#fab219;
+      --viz-grid:#3a3a3c; --viz-ink:#f5f5f7; --viz-ink2:#98989d;
+    }
+  }
   .kpis3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:18px 0}
-  .big{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums}
-  .cat{margin-top:22px}
+  @media(max-width:640px){.kpis3{grid-template-columns:1fr}}
+  .hero{font-size:34px;font-weight:700}
+  .ringwrap{display:flex;align-items:center;gap:14px}
+  .ringpct{font-size:22px;font-weight:700}
+  .story{font-size:15px;line-height:1.9;color:var(--viz-ink);margin:4px 0 2px}
+  .story .k{white-space:nowrap}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin:0 4px 1px 2px;vertical-align:middle}
+  .wfwrap{overflow-x:auto}
+  .wf{width:100%;min-width:640px;height:auto;display:block}
+  .wf text{font-family:inherit}
+  .wf .cap{font-size:12px;font-weight:600;fill:var(--viz-ink)}
+  .wf .axis{font-size:11.5px;fill:var(--viz-ink2)}
+  .wf .conn{stroke:var(--viz-grid);stroke-width:1}
+  .wf .hit{cursor:pointer}
+  #tip{position:fixed;display:none;background:var(--surface);border:1px solid var(--hairline);border-radius:10px;
+    box-shadow:0 6px 24px rgba(0,0,0,.12);padding:8px 12px;font-size:12.5px;pointer-events:none;z-index:50;max-width:260px}
+  #tip .t-amt{font-weight:700;font-size:14px}
+  .cat{margin-top:20px;scroll-margin-top:80px}
   .cat h2{display:flex;justify-content:space-between;align-items:baseline}
   .cat h2 .num{font-variant-numeric:tabular-nums}
-  .catnote{color:var(--ink-2);font-size:13px;margin:2px 0 10px}
+  .catnote{color:var(--viz-ink2);font-size:13px;margin:2px 0 10px}
   table{width:100%;border-collapse:collapse;font-size:13px}
   td,th{padding:7px 10px;border-bottom:1px solid var(--hairline);text-align:left}
   .num{text-align:right;font-variant-numeric:tabular-nums}
   .neg{color:var(--bad)}
   tr.acct-click{cursor:pointer}
-  tr.acct-click:hover{background:var(--hover,rgba(125,125,125,.06))}
-  .excluded{opacity:.65}
+  tr.acct-click:hover{background:rgba(125,125,125,.06)}
+  .excluded{opacity:.68}
   .dhead{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}
 </style>
 </head>
@@ -32,14 +61,28 @@
 
 <div class="wrap">
   <h1 class="title">Where the Money Went</h1>
-  <p class="subtitle">Every dollar of profit traced to where it sits — bank, shelves, owners, building · click any account to see its transactions · <span id="rangeLabel"></span></p>
+  <p class="subtitle">Every dollar of profit traced to where it sits · click a bar or account for the transactions behind it · <span id="rangeLabel"></span></p>
   <div id="rangeBox"></div>
   <div class="banner" id="banner"></div>
 
   <div class="kpis3">
-    <div class="kpi"><div class="k-label">Profit claimed (P&amp;L)</div><div class="big" id="kNoi">—</div><div class="k-note" id="kBasis"></div></div>
-    <div class="kpi"><div class="k-label">Traced to real places</div><div class="big" id="kAcc">—</div><div class="k-note" id="kAccPct"></div></div>
-    <div class="kpi"><div class="k-label">Not yet traceable</div><div class="big" id="kRes">—</div><div class="k-note">Lives behind the broken accounts below until they're repaired</div></div>
+    <div class="kpi"><div class="k-label">Profit claimed (P&amp;L)</div><div class="hero" id="kNoi">—</div><div class="k-note" id="kBasis"></div></div>
+    <div class="kpi"><div class="k-label">Traced to real places</div>
+      <div class="ringwrap">
+        <svg width="64" height="64" viewBox="0 0 64 64" aria-hidden="true">
+          <circle cx="32" cy="32" r="27" fill="none" stroke="var(--viz-grid)" stroke-width="7"/>
+          <circle id="ring" cx="32" cy="32" r="27" fill="none" stroke="var(--viz-bank)" stroke-width="7"
+            stroke-linecap="round" stroke-dasharray="0 169.6" transform="rotate(-90 32 32)"/>
+        </svg>
+        <div><div class="ringpct" id="kPct">—</div><div class="k-note" id="kAcc"></div></div>
+      </div>
+    </div>
+    <div class="kpi"><div class="k-label">Not yet traceable</div><div class="hero" id="kRes">—</div><div class="k-note" id="kResNote">Shrinks as the broken accounts get repaired</div></div>
+  </div>
+
+  <div class="card">
+    <div class="story" id="story"></div>
+    <div class="wfwrap"><svg id="wf" class="wf" role="img" aria-label="Waterfall: profit distributed to its destinations"></svg></div>
   </div>
 
   <div id="cats"></div>
@@ -56,6 +99,7 @@
     <div class="dnote" id="dNote"></div>
   </div>
 </div>
+<div id="tip"></div>
 
 <script src="/app.js"></script>
 <script>
@@ -65,6 +109,100 @@ const QBO_PATH = { Bill: 'bill', Purchase: 'expense', Check: 'check', Deposit: '
 function qboLink(type, id) {
   const p = QBO_PATH[type];
   return p && id ? 'https://qbo.intuit.com/app/' + p + '?txnId=' + encodeURIComponent(id) : null;
+}
+const CAT_STYLE = {
+  banks:     { color: 'var(--viz-bank)', short: 'Bank' },
+  inventory: { color: 'var(--viz-inv)',  short: 'Shelves' },
+  owners:    { color: 'var(--viz-own)',  short: 'Owners' },
+  capex:     { color: 'var(--viz-cap)',  short: 'Building' },
+  financing: { color: 'var(--viz-fin)',  short: 'Cards & dues' },
+  other:     { color: 'var(--viz-oth)',  short: 'Other' },
+};
+const fmtK = (v) => {
+  const a = Math.abs(v);
+  const s = a >= 995000 ? '$' + (a / 1e6).toFixed(2) + 'M' : a >= 1000 ? '$' + Math.round(a / 1000) + 'K' : '$' + Math.round(a);
+  return (v < 0 ? '−' : '') + s;
+};
+
+function renderStory(d) {
+  if (!d.noi || d.noi <= 0) { $('story').innerHTML = ''; return; }
+  const parts = [];
+  for (const c of d.categories) {
+    if (!c.inProof || !CAT_STYLE[c.key]) continue;
+    const per100 = (c.total / d.noi) * 100;
+    if (Math.abs(per100) < 0.5) continue;
+    const st = CAT_STYLE[c.key];
+    const verb = { banks: 'stayed in the bank', inventory: 'became inventory', owners: 'went to the owners',
+      capex: 'built the store', financing: per100 >= 0 ? 'paid old dues' : 'was lent by cards & vendors',
+      other: 'moved elsewhere' }[c.key];
+    parts.push('<span class="k"><span class="dot" style="background:' + st.color + '"></span><strong>$' +
+      Math.abs(per100).toFixed(0) + '</strong> ' + verb + '</span>');
+  }
+  const resPer = (d.residual / d.noi) * 100;
+  if (Math.abs(resPer) >= 0.5) parts.push('<span class="k"><span class="dot" style="background:var(--viz-warn)"></span><strong>$' + Math.abs(resPer).toFixed(0) + '</strong> ' + (resPer >= 0 ? 'not yet traceable ⚠' : 'over-traced') + '</span>');
+  $('story').innerHTML = '<strong>Of every $100 of profit:</strong> &nbsp;' + parts.join(' &nbsp;·&nbsp; ');
+}
+
+function renderWaterfall(d) {
+  const svg = $('wf');
+  const steps = [{ key: '_total', label: 'Profit', amount: d.noi, color: 'var(--viz-total)', from: 0, to: d.noi }];
+  let run = d.noi;
+  for (const c of d.categories) {
+    if (!c.inProof || !CAT_STYLE[c.key]) continue;
+    steps.push({ key: c.key, label: CAT_STYLE[c.key].short, amount: c.total, color: CAT_STYLE[c.key].color,
+      from: run - c.total, to: run, note: c.label });
+    run -= c.total;
+  }
+  steps.push({ key: '_res', label: 'Untraced ⚠', amount: run, color: 'var(--viz-warn)', from: 0, to: run,
+    note: 'Lives behind the broken accounts until they’re repaired' });
+
+  const W = 900, H = 330, mL = 8, mR = 8, mT = 30, mB = 26;
+  const plotW = W - mL - mR, plotH = H - mT - mB;
+  const maxV = Math.max(...steps.map((s) => Math.max(s.from, s.to)), d.noi) * 1.02;
+  const minV = Math.min(0, ...steps.map((s) => Math.min(s.from, s.to)));
+  const y = (v) => mT + plotH * (1 - (v - minV) / (maxV - minV));
+  const band = plotW / steps.length, barW = 24;
+  let els = '';
+  // baseline
+  els += '<line x1="' + mL + '" y1="' + y(0) + '" x2="' + (W - mR) + '" y2="' + y(0) + '" stroke="var(--viz-grid)" stroke-width="1"/>';
+  steps.forEach((s, i) => {
+    const cx = mL + band * i + band / 2, x = cx - barW / 2;
+    const top = y(Math.max(s.from, s.to)), bot = y(Math.min(s.from, s.to));
+    const h = Math.max(bot - top, 2), r = Math.min(4, h / 2);
+    // rounded top, square bottom
+    const path = 'M' + x + ' ' + bot + ' L' + x + ' ' + (top + r) + ' Q' + x + ' ' + top + ' ' + (x + r) + ' ' + top +
+      ' L' + (x + barW - r) + ' ' + top + ' Q' + (x + barW) + ' ' + top + ' ' + (x + barW) + ' ' + (top + r) +
+      ' L' + (x + barW) + ' ' + bot + ' Z';
+    els += '<path d="' + path + '" fill="' + s.color + '"/>';
+    // connector at the running level, from this bar's edge to the next bar's edge
+    if (i < steps.length - 1) {
+      const level = y(s.key === '_total' ? s.to : s.from);
+      const nextLeft = mL + band * (i + 1) + band / 2 - barW / 2;
+      els += '<line class="conn" x1="' + (x + barW) + '" y1="' + level + '" x2="' + nextLeft + '" y2="' + level + '"/>';
+    }
+    els += '<text class="cap" x="' + cx + '" y="' + (top - 7) + '" text-anchor="middle">' + fmtK(s.amount) + '</text>';
+    els += '<text class="axis" x="' + cx + '" y="' + (H - 8) + '" text-anchor="middle">' + s.label + '</text>';
+    els += '<rect class="hit" data-i="' + i + '" x="' + (mL + band * i) + '" y="' + mT + '" width="' + band + '" height="' + (plotH + mB) + '" fill="transparent"/>';
+  });
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+  svg.innerHTML = els;
+  const tip = $('tip');
+  svg.querySelectorAll('.hit').forEach((r) => {
+    const s = steps[Number(r.dataset.i)];
+    r.addEventListener('mousemove', (e) => {
+      tip.style.display = 'block';
+      tip.style.left = Math.min(e.clientX + 14, window.innerWidth - 280) + 'px';
+      tip.style.top = (e.clientY + 14) + 'px';
+      tip.innerHTML = '<div>' + escapeHtml(s.note || (s.key === '_total' ? 'Net operating income for this range' : s.label)) + '</div>' +
+        '<div class="t-amt">' + usd.format(s.amount) + '</div>' +
+        (s.key !== '_total' && s.key !== '_res' ? '<div class="hint">click to see the accounts</div>' : '');
+    });
+    r.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+    r.addEventListener('click', () => {
+      const target = document.getElementById('cat-' + s.key);
+      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  });
 }
 
 async function load(force) {
@@ -76,14 +214,23 @@ async function load(force) {
     mapData = d;
     $('kNoi').textContent = usd.format(d.noi);
     $('kBasis').textContent = d.basis;
-    $('kAcc').textContent = usd.format(d.accounted);
-    $('kAccPct').textContent = d.noi ? Math.round((d.accounted / d.noi) * 100) + '% of the claim' : '';
+    const pct = d.noi ? Math.max(0, Math.min(1, d.accounted / d.noi)) : 0;
+    $('kPct').textContent = Math.round(pct * 100) + '%';
+    $('kAcc').textContent = usd.format(d.accounted) + ' traced';
+    const ring = $('ring');
+    const CIRC = 2 * Math.PI * 27;
+    ring.setAttribute('stroke-dasharray', (pct * CIRC).toFixed(1) + ' ' + CIRC.toFixed(1));
+    ring.setAttribute('stroke', pct >= 0.85 ? 'var(--viz-bank)' : 'var(--viz-warn)');
     $('kRes').textContent = usd.format(d.residual);
-    $('kRes').classList.toggle('neg', Math.abs(d.residual) > Math.abs(d.noi) * 0.15);
+    renderStory(d);
+    renderWaterfall(d);
+
     let h = '';
     for (const c of d.categories) {
+      const st = CAT_STYLE[c.key];
       const excluded = !c.inProof;
-      h += '<div class="card cat' + (excluded ? ' excluded' : '') + '"><h2>' + escapeHtml(c.label) +
+      h += '<div class="card cat' + (excluded ? ' excluded' : '') + '" id="cat-' + c.key + '"><h2>' +
+        (st ? '<span><span class="dot" style="background:' + st.color + '"></span>' + escapeHtml(c.label) + '</span>' : '<span>' + escapeHtml(c.label) + '</span>') +
         '<span class="num">' + (excluded ? '' : usd.format(c.total)) + '</span></h2>' +
         (c.note ? '<div class="catnote">' + escapeHtml(c.note) + '</div>' : '') +
         '<div style="overflow-x:auto"><table><thead><tr><th>Account</th><th class="num">Start</th><th class="num">End</th><th class="num">' +
