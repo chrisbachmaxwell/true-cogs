@@ -31,6 +31,7 @@ export interface QboApi {
 }
 
 export type EntityName =
+  | 'CreditCardPayment'
   | 'BillPayment'
   | 'Purchase'
   | 'Bill'
@@ -43,6 +44,7 @@ export type EntityName =
   | 'Transfer';
 
 const FINDER_BY_ENTITY: Record<EntityName, string> = {
+  CreditCardPayment: 'RAW', // node-quickbooks predates this entity; raw query path
   BillPayment: 'findBillPayments',
   Purchase: 'findPurchases',
   Bill: 'findBills',
@@ -229,7 +231,45 @@ export async function createQboApi(): Promise<QboApi> {
     return results;
   }
 
+  // Entities the bundled library predates go through the raw query endpoint
+  // with the same token, throttle, and pagination. CreditCardPayment's query
+  // table and response key is CreditCardPaymentTxn.
+  async function queryAllRaw(table: string, respKey: string, baseCriteria: any[]): Promise<any[]> {
+    const base =
+      config.qboEnvironment === 'sandbox'
+        ? 'https://sandbox-quickbooks.api.intuit.com'
+        : 'https://quickbooks.api.intuit.com';
+    const where = baseCriteria
+      .map((c: any) => `${c.field} ${c.operator} '${String(c.value).replace(/'/g, '')}'`)
+      .join(' AND ');
+    const results: any[] = [];
+    let pos = 1;
+    for (;;) {
+      const sql = `SELECT * FROM ${table}${where ? ' WHERE ' + where : ''} ORDERBY Id STARTPOSITION ${pos} MAXRESULTS ${PAGE_SIZE}`;
+      const data: any = await withThrottleAndRetry(`rawQuery(${table})`, async () => {
+        const r = await fetch(
+          `${base}/v3/company/${tokens.realmId}/query?query=${encodeURIComponent(sql)}&minorversion=${QBO_MINOR_VERSION}`,
+          { headers: { Authorization: `Bearer ${tokens.accessToken}`, Accept: 'application/json' } }
+        );
+        if (!r.ok) {
+          const err: any = new Error(`QBO query ${table} failed (HTTP ${r.status})`);
+          err.statusCode = r.status;
+          throw err;
+        }
+        return r.json();
+      });
+      const page: any[] = data?.QueryResponse?.[respKey] || [];
+      results.push(...page);
+      if (page.length < PAGE_SIZE) break;
+      pos += PAGE_SIZE;
+    }
+    return results;
+  }
+
   async function queryAll(entity: EntityName, baseCriteria: any[]): Promise<any[]> {
+    if (entity === 'CreditCardPayment') {
+      return queryAllRaw('CreditCardPaymentTxn', 'CreditCardPaymentTxn', baseCriteria);
+    }
     const method = FINDER_BY_ENTITY[entity];
     const results: any[] = [];
     let offset = 1; // STARTPOSITION is 1-based

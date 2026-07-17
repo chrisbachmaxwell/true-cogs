@@ -749,6 +749,17 @@ app.get(
         const b = bucket(bp.TxnDate); b.fundedOut += Number(bp.TotalAmt) || 0; b.count++;
       }
     }
+    // Dedicated pay-down-card transactions: money OUT of BankAccountRef,
+    // INTO CreditCardAccountRef (reduces what's owed on the card).
+    for (const ccp of await api.queryByDateRange('CreditCardPayment', start, end)) {
+      const amt = Number(ccp.Amount) || 0;
+      if (String(ccp.CreditCardAccountRef?.value) === id) {
+        const b = bucket(ccp.TxnDate); b.codedIn += amt; b.count++;
+      }
+      if (String(ccp.BankAccountRef?.value) === id) {
+        const b = bucket(ccp.TxnDate); b.fundedOut += amt; b.count++;
+      }
+    }
     for (const je of await api.queryByDateRange('JournalEntry', start, end)) {
       for (const l of je.Line || []) {
         const d = l.JournalEntryLineDetail;

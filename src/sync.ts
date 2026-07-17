@@ -22,6 +22,7 @@ export const SYNCED_ENTITIES: EntityName[] = [
   'VendorCredit',
   'Transfer',
   'JournalEntry',
+  'CreditCardPayment',
 ];
 
 const LAST_SYNC_KEY = 'last_sync_at';

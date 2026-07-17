@@ -144,6 +144,10 @@ export async function computeBankFlow(
       transfersIn += amt;
     }
   }
+  // Dedicated pay-down-card transactions funded from a bank account.
+  for (const ccp of await api.queryByDateRange('CreditCardPayment', startDate, endDate)) {
+    if (toBank(ccp.BankAccountRef)) transfersToCards += Number(ccp.Amount) || 0;
+  }
   const inflowsTotal = round2(depositsIn + directSr + directPay + transfersIn);
   const outflowsTotal = round2(bpTotal + purchTotal + refundsOut + transfersToCards + transfersOutOther);
   const netCategorized = round2(inflowsTotal - outflowsTotal);
@@ -240,6 +244,13 @@ export async function bankFlowDetail(
       if (line === 'transfersOut' && from && !to) {
         push(t.TxnDate, 'To ' + (t.ToAccountRef?.name || 'other account'), 'Transfer', t.Id, Number(t.Amount) || 0);
       }
+    }
+    if (line === 'transfersOut') {
+      for (const ccp of await api.queryByDateRange('CreditCardPayment', startDate, endDate)) {
+        if (!toBank(ccp.BankAccountRef)) continue;
+        push(ccp.TxnDate, 'Card payment — ' + (ccp.CreditCardAccountRef?.name || 'credit card'), 'CreditCardPayment', ccp.Id, Number(ccp.Amount) || 0);
+      }
+      rows.sort((a, b) => a.date.localeCompare(b.date));
     }
   } else if (line === 'billPayments') {
     for (const bp of await api.queryByDateRange('BillPayment', startDate, endDate)) {
