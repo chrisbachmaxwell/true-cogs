@@ -1,0 +1,14 @@
+{
+ "task": "card-payments-2025-26-amex",
+ "description": "2025-26 Amex Platinum register repair: bank-side payment entries whose card-side twin (AUTOPAY record) already reduces the card. Recode the line from PLATINUM Amex -009 to the Credit Cards wash account so each payment counts once. 6 rows are AX Purple payments cross-coded onto the Platinum register; 2 rows are straight doubles.",
+ "rows": [
+  { "txnId": "45663", "expectedAmount": 54511.44 },
+  { "txnId": "58900", "expectedAmount": 106264.84 },
+  { "txnId": "37822", "expectedAmount": 22759.69 },
+  { "txnId": "46249", "expectedAmount": 30905.38 },
+  { "txnId": "53986", "expectedAmount": 24479.83 },
+  { "txnId": "56551", "expectedAmount": 37645.22 },
+  { "txnId": "58015", "expectedAmount": 27402.55 },
+  { "txnId": "59439", "expectedAmount": 20000.00 }
+ ]
+}

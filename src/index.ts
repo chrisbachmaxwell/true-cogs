@@ -1623,6 +1623,12 @@ const CLEANUP_TASKS: Record<string, { file: string; from: 'inventory' | string; 
   'tax-pulls-2023': { file: 'tax-pulls-2023.json', from: '66000' },
   'tax-pulls-2024': { file: 'tax-pulls-2024.json', from: '66000' },
   'ach-stragglers': { file: 'ach-stragglers.json', from: 'inventory', defaultTo: 'ACH' },
+  // 2025-26 card-register repair (Chris: "lets just make sure 2025 and 2026 are
+  // fixed", 2026-07-17): bank-side card payments whose card-side AUTOPAY record
+  // already reduces the card move to the Credit Cards wash account, so each
+  // payment counts once. Dollar-neutral between balance-sheet accounts.
+  'card-payments-2025-26-amex': { file: 'card-payments-2025-26-amex.json', from: 'PLATINUM Amex Credit Card -009', defaultTo: 'Credit Cards' },
+  'card-payments-2025-26-purple': { file: 'card-payments-2025-26-purple.json', from: 'AX Purple (64001)', defaultTo: 'Credit Cards' },
 };
 
 function loadBelt(task: string): BeltRow[] {

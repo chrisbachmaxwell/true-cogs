@@ -1,0 +1,7 @@
+{
+ "task": "card-payments-2025-26-purple",
+ "description": "2026 AX Purple register repair: one bank-side payment (2026-01-20) coded directly to the card while the card-side AUTOPAY record already reduces it. Recode to the Credit Cards wash account.",
+ "rows": [
+  { "txnId": "52804", "expectedAmount": 34336.66 }
+ ]
+}
