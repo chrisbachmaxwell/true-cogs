@@ -112,11 +112,23 @@ export async function bootstrapAdmin(): Promise<void> {
       console.warn('[auth] no users and no ADMIN_EMAIL/ADMIN_INITIAL_PASSWORD set — dashboard remains open');
     }
   }
-  // Create-only: an admin can reset or remove the agent account from /users
-  // without a redeploy resurrecting the old password.
-  if (config.agentEmail && config.agentPassword && !(await getUser(config.agentEmail))) {
-    await upsertUser(config.agentEmail, config.agentPassword, { isAdmin: config.agentIsAdmin, mustChange: false });
-    console.log(`[auth] seeded agent account ${normalize(config.agentEmail)}${config.agentIsAdmin ? ' (admin)' : ''}`);
+  // Create-only for the password: an admin can reset or remove the agent
+  // account from /users without a redeploy resurrecting the old password.
+  // The admin FLAG, however, always follows AGENT_IS_ADMIN so Chris can grant
+  // or revoke the agent's admin access with one env change + redeploy.
+  if (config.agentEmail && config.agentPassword) {
+    const agent = await getUser(config.agentEmail);
+    if (!agent) {
+      await upsertUser(config.agentEmail, config.agentPassword, { isAdmin: config.agentIsAdmin, mustChange: false });
+      console.log(`[auth] seeded agent account ${normalize(config.agentEmail)}${config.agentIsAdmin ? ' (admin)' : ''}`);
+    } else if (agent.isAdmin !== config.agentIsAdmin) {
+      await getPool().query(`UPDATE users SET is_admin = $2 WHERE email = $1`, [
+        normalize(config.agentEmail),
+        config.agentIsAdmin,
+      ]);
+      invalidateEnabledCache();
+      console.log(`[auth] agent account ${normalize(config.agentEmail)} is_admin -> ${config.agentIsAdmin}`);
+    }
   }
 }
 

@@ -1363,7 +1363,10 @@ interface BeltRow {
  * endpoints refuse any unknown task name. */
 const CLEANUP_TASKS: Record<string, { file: string; from: 'inventory' | string; defaultTo?: string }> = {
   'ach-belt': { file: 'ach-belt.json', from: 'inventory', defaultTo: 'ACH' },
-  'tax-pulls-2023': { file: 'tax-pulls-2023.json', from: '66000 Payroll Expenses' },
+  // Token is the account NUMBER: resolveAccounts matches AcctNum/Name exactly,
+  // and the account's Name is just "Payroll Expenses".
+  'tax-pulls-2023': { file: 'tax-pulls-2023.json', from: '66000' },
+  'ach-stragglers': { file: 'ach-stragglers.json', from: 'inventory', defaultTo: 'ACH' },
 };
 
 function loadBelt(task: string): BeltRow[] {
