@@ -3,7 +3,7 @@ import path from 'path';
 import { config, missingQboConfig } from './config';
 import { initDb, getConfigValue, setConfigValue, getCachedMonth, setCachedMonth, getPool } from './db';
 import { buildAuthUri, handleCallback, createQboApi, connectionStatus, QboApi } from './qbo';
-import { computeMonthlySpend, MonthlySpendResult, SpendOptions } from './inventorySpend';
+import { computeMonthlySpend, inventoryPortionOfLines, MonthlySpendResult, SpendOptions } from './inventorySpend';
 import { computeMonthlyPnl, MonthlyPnl, PnlContext } from './pnl';
 import { computePnlDetail, expenseAccountDetail, DetailRow } from './pnlDetail';
 import { computeCashFlow, reportBalances } from './cashflow';
@@ -934,7 +934,7 @@ app.post(
       [asOf, value, req.body?.note || null]
     );
     // Adjusted statements depend on counts — drop cached statements.
-    await getPool().query(`DELETE FROM monthly_cache WHERE month LIKE '%stmt2:%'`);
+    await getPool().query(`DELETE FROM monthly_cache WHERE month LIKE '%stmt%'`);
     res.json({ ok: true });
   })
 );
@@ -946,7 +946,7 @@ app.delete(
     const asOf = String(req.query.asOf || '');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(asOf)) return res.status(400).json({ error: 'Provide ?asOf=YYYY-MM-DD' });
     await getPool().query(`DELETE FROM inventory_counts WHERE as_of = $1`, [asOf]);
-    await getPool().query(`DELETE FROM monthly_cache WHERE month LIKE '%stmt2:%'`);
+    await getPool().query(`DELETE FROM monthly_cache WHERE month LIKE '%stmt%'`);
     res.json({ ok: true });
   })
 );
@@ -977,7 +977,7 @@ async function getPnlCtx(api: QboApi): Promise<PnlContext & { accountNames: Map<
  * the other range endpoints; also the data source for /api/checks. */
 async function getStatement(range: { start: string; end: string }, force: boolean): Promise<any> {
   const { opts: spendOpts, cachePrefix } = await getSpendOpts(await getComputeApi());
-  const cacheKey = `${cachePrefix}stmt2:${range.start}:${range.end}`;
+  const cacheKey = `${cachePrefix}stmt3:${range.start}:${range.end}`;
   if (!force) {
     const cached = await getCachedMonth(cacheKey);
     const closed = range.end < new Date().toISOString().slice(0, 10);
@@ -1057,7 +1057,11 @@ async function getStatement(range: { start: string; end: string }, force: boolea
           );
         }
         const inventoryChange = r2(endCount.value - beginCount.value);
-        const adjustedCogsTotal = r2(pnl.cogs - inventoryChange + pnl.directCosts - pnl.cogsOffsets);
+        // Accounting-basis purchases = inventory RECEIVED (bills + direct buys,
+        // net of vendor credits), not cash paid — paying January's bill in
+        // February must not move profit between periods (Chris, 2026-07-17:
+        // "switch"). Cash paid stays on the statement as the bank cross-check.
+        const adjustedCogsTotal = r2(spend.bookedTotal - inventoryChange + pnl.directCosts - pnl.cogsOffsets);
         const adjustedGp = r2(pnl.revenueNet - adjustedCogsTotal);
         adjusted = {
           beginAsOf: beginCount.asOf,
@@ -1089,6 +1093,12 @@ async function getStatement(range: { start: string; end: string }, force: boolea
           directCosts: pnl.directCosts,
           rebateOffsets: pnl.cogsOffsets,
           total: r2(pnl.cogs + pnl.directCosts - pnl.cogsOffsets),
+          purchasesReceived: spend.bookedTotal,
+          purchasesReceivedParts: {
+            bills: spend.billedTotal,
+            direct: spend.directBoughtTotal,
+            vendorCredits: spend.vendorCreditBooked,
+          },
           bookedReference: spend.bookedTotal,
           vendorCreditsApplied: spend.vendorCreditsApplied,
         },
@@ -1183,6 +1193,37 @@ app.get(
           ? 'No remittance transactions are visible to the API for this range — the statement fell back to the tax account’s balance movement, which can’t be itemized here.'
           : undefined;
       return res.json({ line, rows: result.rows, sum: result.sum, note });
+    }
+
+    // Inventory received — the accounting-basis purchases line: bills + direct
+    // buys − vendor credits, itemized with the same line math as the statement.
+    if (line === 'purchasesReceived') {
+      const accounts = (await getTrackedAccounts()).map((t) => t.id);
+      const result = await dedupe(`dt:pr:${range.start}:${range.end}`, async () => {
+        const api = await getComputeApi();
+        const rows: DetailRow[] = [];
+        const vendorName = (t: any) =>
+          t.VendorRef?.name || t.EntityRef?.name || t.VendorRef?.value || t.EntityRef?.value || 'Unknown payee';
+        for (const b of await api.queryByDateRange('Bill', range.start, range.end)) {
+          const amt = Math.round(inventoryPortionOfLines(b, accounts) * 100) / 100;
+          if (amt === 0) continue;
+          rows.push({ date: b.TxnDate, name: vendorName(b), txnType: 'Bill', txnId: b.Id ? String(b.Id) : null, amount: amt, detail: b.DocNumber ? `Bill #${b.DocNumber}` : undefined, group: vendorName(b) });
+        }
+        for (const p of await api.queryByDateRange('Purchase', range.start, range.end)) {
+          const portion = inventoryPortionOfLines(p, accounts);
+          if (portion <= 0) continue;
+          const amt = Math.round((p.Credit === true ? -portion : portion) * 100) / 100;
+          rows.push({ date: p.TxnDate, name: vendorName(p), txnType: p.PaymentType === 'Check' ? 'Check' : 'Purchase', txnId: p.Id ? String(p.Id) : null, amount: amt, detail: 'Direct buy (no bill)', group: vendorName(p) });
+        }
+        for (const vc of await api.queryByDateRange('VendorCredit', range.start, range.end)) {
+          const amt = Math.round(inventoryPortionOfLines(vc, accounts) * 100) / 100;
+          if (amt === 0) continue;
+          rows.push({ date: vc.TxnDate, name: vendorName(vc), txnType: 'VendorCredit', txnId: vc.Id ? String(vc.Id) : null, amount: -amt, detail: 'Vendor credit (return)', group: vendorName(vc) });
+        }
+        rows.sort((a, b) => a.date.localeCompare(b.date));
+        return { rows, sum: Math.round(rows.reduce((s, r) => s + r.amount, 0) * 100) / 100 };
+      });
+      return res.json({ line, rows: result.rows, sum: result.sum });
     }
 
     const incomeLines = ['deposits', 'invoicePayments', 'salesReceipts', 'refunds', 'feedRefunds', 'rebates', 'reimbursements'];

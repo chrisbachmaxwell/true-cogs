@@ -40,8 +40,14 @@ export interface MonthlySpendResult {
   total: number;
   bucket1Total: number;
   bucket2Total: number;
-  /** Accrual view: all Bill + Purchase lines coded to inventory this month, regardless of payment. */
+  /** Inventory RECEIVED this month: Bill + direct Purchase lines coded to
+   * inventory, net of vendor-credit returns — regardless of when paid. This is
+   * the "purchases" the begin+purchases−end COGS formula wants. */
   bookedTotal: number;
+  /** bookedTotal components, for the drill-down and cross-checks. */
+  billedTotal: number;
+  directBoughtTotal: number;
+  vendorCreditBooked: number;
   /** Informational only — already reflected in Bucket 1 net payment amounts. */
   vendorCreditsApplied: number;
   /** Spend skipped because it was drawn from an excluded pseudo-bank account. */
@@ -226,13 +232,19 @@ export async function computeMonthlySpend(
     });
   }
 
-  // ---- Reconciliation: booked (accrual) total ----
+  // ---- Inventory received (the accounting-basis "purchases") ----
   const bills = await api.queryByDateRange('Bill', start, end);
   let billBooked = 0;
   for (const bill of bills) {
     billBooked += inventoryPortionOfLines(bill, accountIdList);
   }
-  const bookedTotal = round2(billBooked + purchaseBooked);
+  // Vendor credits (returns / credit memos from vendors) reduce inventory
+  // received in the period they're issued.
+  let vendorCreditBooked = 0;
+  for (const vc of await api.queryByDateRange('VendorCredit', start, end)) {
+    vendorCreditBooked += inventoryPortionOfLines(vc, accountIdList);
+  }
+  const bookedTotal = round2(billBooked + purchaseBooked - vendorCreditBooked);
 
   // ---- Out-of-scope flow detection (v1 flags these, doesn't count them) ----
   try {
@@ -282,6 +294,9 @@ export async function computeMonthlySpend(
     bucket1Total: round2(bucket1Total),
     bucket2Total: round2(bucket2Total),
     bookedTotal,
+    billedTotal: round2(billBooked),
+    directBoughtTotal: round2(purchaseBooked),
+    vendorCreditBooked: round2(vendorCreditBooked),
     vendorCreditsApplied: round2(vendorCreditsApplied),
     excludedFundingTotal: round2(excludedFundingTotal),
     transactions,

@@ -19,6 +19,7 @@ function mockApi(data: {
   purchases?: any[];
   bills?: Record<string, any>;
   billsInMonth?: any[];
+  vendorCredits?: any[];
   journalEntries?: any[];
   deposits?: any[];
 }): QboApi {
@@ -27,6 +28,7 @@ function mockApi(data: {
       if (entity === 'BillPayment') return data.billPayments || [];
       if (entity === 'Purchase') return data.purchases || [];
       if (entity === 'Bill') return data.billsInMonth || [];
+      if (entity === 'VendorCredit') return data.vendorCredits || [];
       if (entity === 'JournalEntry') return data.journalEntries || [];
       if (entity === 'Deposit') return data.deposits || [];
       return [];
@@ -343,4 +345,19 @@ test('payments funded from an excluded clearing account are left out and reporte
   const r2 = await computeMonthlySpend(api, MAT_INV, '2026-06');
   assert.equal(r2.total, 1350);
   assert.equal(r2.excludedFundingTotal, 0);
+});
+
+test('inventory received nets vendor credits and splits its components', async () => {
+  const api = mockApi({
+    billsInMonth: [{ Id: 'B9', TotalAmt: 9000, Line: [expenseLine(MAT_INV, 9000)] }],
+    purchases: [
+      { Id: 'P9', TxnDate: '2026-06-05', PaymentType: 'Cash', Line: [expenseLine(MAT_INV, 500)] },
+    ],
+    vendorCredits: [{ Id: 'VC9', TotalAmt: 300, Line: [expenseLine(MAT_INV, 300)] }],
+  });
+  const r = await computeMonthlySpend(api, MAT_INV, '2026-06');
+  assert.equal(r.billedTotal, 9000);
+  assert.equal(r.directBoughtTotal, 500);
+  assert.equal(r.vendorCreditBooked, 300);
+  assert.equal(r.bookedTotal, 9200); // 9000 + 500 − 300
 });
