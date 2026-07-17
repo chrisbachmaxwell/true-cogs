@@ -14,6 +14,9 @@ export interface QboApi {
   /** Entities modified after the given ISO timestamp (for incremental sync). */
   queryChangedSince?(entity: EntityName, sinceIso: string): Promise<any[]>;
   getBill(id: string): Promise<any>;
+  /** Batch bill lookup — the mirror answers in one query instead of one
+   * round-trip per bill, which is what makes cold P&L computes fast. */
+  getBills?(ids: string[]): Promise<any[]>;
   getInvoice(id: string): Promise<any>;
   /** Fetch a Purchase with its current SyncToken (write flows need it fresh). */
   getPurchase?(id: string): Promise<any>;

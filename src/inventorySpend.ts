@@ -145,6 +145,24 @@ export async function computeMonthlySpend(
   let vendorCreditsApplied = 0;
   const billPayments = await api.queryByDateRange('BillPayment', start, end);
 
+  // Prefetch every linked bill in one batch: fetching them one-by-one inside
+  // the loop was the cold-load bottleneck (hundreds of sequential round-trips
+  // — ~30s for a year range; batched it's one query).
+  if (api.getBills) {
+    const linkedBillIds = new Set<string>();
+    for (const bp of billPayments) {
+      for (const line of bp.Line || []) {
+        const linked: any[] = line.LinkedTxn || [];
+        if (linked.some((t) => t.TxnType === 'VendorCredit')) continue;
+        const bill = linked.find((t) => t.TxnType === 'Bill');
+        if (bill?.TxnId) linkedBillIds.add(String(bill.TxnId));
+      }
+    }
+    for (const bill of await api.getBills([...linkedBillIds])) {
+      if (bill?.Id) billCache.set(String(bill.Id), Promise.resolve(bill));
+    }
+  }
+
   for (const bp of billPayments) {
     const payMethod = bp.PayType || 'Unknown';
     const vendor = bp.VendorRef?.name || bp.VendorRef?.value || 'Unknown vendor';

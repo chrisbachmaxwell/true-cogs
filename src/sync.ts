@@ -75,6 +75,13 @@ async function syncAccounts(api: QboApi): Promise<number> {
 
 /** Runs a sync. Full = re-pull the whole window; otherwise only entities
  * changed since the last sync (with a 1h overlap for clock skew). */
+/** Registered by the server: recomputes commonly viewed statements after a
+ * sync lands, so users hit warm caches instead of the cold path. */
+let onSyncComplete: (() => void) | null = null;
+export function setOnSyncComplete(fn: () => void): void {
+  onSyncComplete = fn;
+}
+
 export async function runSync(full: boolean): Promise<string> {
   if (running) return 'already running';
   running = true;
@@ -115,6 +122,9 @@ export async function runSync(full: boolean): Promise<string> {
     await setConfigValue(LAST_SYNC_KEY, startedAt);
     lastResult = `${doFull ? 'full' : 'incremental'} sync ok @ ${startedAt} — ${counts.join(' ')}`;
     console.log(`[sync] ${lastResult}`);
+    // Re-warm the report caches the sync may have just invalidated, so the
+    // next page load never pays the cold-compute cost.
+    if (onSyncComplete) setTimeout(() => onSyncComplete!(), 0);
     return lastResult;
   } catch (err: any) {
     lastResult = `sync failed @ ${startedAt}: ${err.message}`;
@@ -159,6 +169,21 @@ export function makeLocalApi(remote: QboApi): QboApi {
       const bill = await remote.getBill(id);
       await upsertTxns('Bill', [bill]);
       return bill;
+    },
+    async getBills(ids: string[]) {
+      if (!ids.length) return [];
+      const res = await db.query(`SELECT data FROM qbo_txns WHERE entity_type = 'Bill' AND id = ANY($1)`, [ids.map(String)]);
+      const found = res.rows.map((r) => r.data);
+      const have = new Set(found.map((b: any) => String(b.Id)));
+      for (const id of ids) {
+        if (have.has(String(id))) continue;
+        try {
+          const bill = await remote.getBill(String(id));
+          await upsertTxns('Bill', [bill]);
+          found.push(bill);
+        } catch { /* deleted or unreachable — caller treats as missing */ }
+      }
+      return found;
     },
     getInvoice: (id) => remote.getInvoice(id),
     async getPurchase(id: string) {

@@ -7,7 +7,7 @@ import { computeMonthlySpend, MonthlySpendResult, SpendOptions } from './invento
 import { computeMonthlyPnl, MonthlyPnl, PnlContext } from './pnl';
 import { computePnlDetail, expenseAccountDetail, DetailRow } from './pnlDetail';
 import { computeCashFlow, reportBalances } from './cashflow';
-import { mirrorChangedSince, runSync, syncIfStale, syncStatus, isStoreFresh, makeLocalApi, upsertTxns } from './sync';
+import { mirrorChangedSince, runSync, syncIfStale, syncStatus, isStoreFresh, makeLocalApi, upsertTxns, setOnSyncComplete } from './sync';
 import { planReclassify, planRevert } from './reclassify';
 import fs from 'fs';
 import { bankFlowDetail, computeBankFlow } from './bankflow';
@@ -1410,6 +1410,36 @@ app.get(
   })
 );
 
+/** Recomputes the statements people actually open (current YTD + recent full
+ * years) whenever a sync may have invalidated them. Warm hits cost almost
+ * nothing, so running this after every sync is cheap insurance against the
+ * cold-load wait on the P&L page. */
+let warmingCaches = false;
+async function warmStatementCaches(): Promise<void> {
+  if (warmingCaches) return;
+  warmingCaches = true;
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const year = Number(today.slice(0, 4));
+    const ranges = [
+      { start: `${year}-01-01`, end: monthDateRange(today.slice(0, 7)).end },
+      ...[1, 2, 3].map((i) => ({ start: `${year - i}-01-01`, end: `${year - i}-12-31` })),
+    ];
+    for (const range of ranges) {
+      const t0 = Date.now();
+      try {
+        await getStatement(range, false);
+        const ms = Date.now() - t0;
+        if (ms > 1000) console.log(`[warm] ${range.start}..${range.end} recomputed in ${(ms / 1000).toFixed(1)}s`);
+      } catch (err: any) {
+        console.warn(`[warm] ${range.start}..${range.end} failed: ${err.message}`);
+      }
+    }
+  } finally {
+    warmingCaches = false;
+  }
+}
+
 // ---- drill-down details: the transactions behind each statement line ----
 
 /** Income-side detail (deposits, payments, refunds, offsets), computed with the
@@ -2358,8 +2388,12 @@ async function main() {
     await bootstrapAdmin();
     // Keep the raw-transaction mirror fresh: check at boot and twice daily.
     if (!missingQboConfig().length) {
+      setOnSyncComplete(() => { warmStatementCaches().catch(() => undefined); });
       setTimeout(() => syncIfStale(), 15_000);
       setInterval(() => syncIfStale(), 12 * 60 * 60 * 1000);
+      // Boot-time warm too: QuickBooks edits made while the app was redeploying
+      // would otherwise leave the first visitor on the cold path.
+      setTimeout(() => warmStatementCaches().catch(() => undefined), 60_000);
     }
   } else {
     console.warn('[db] DATABASE_URL not set — token storage and caching disabled');
