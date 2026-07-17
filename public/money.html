@@ -47,8 +47,15 @@
   .neg{color:var(--bad)}
   tr.acct-click{cursor:pointer}
   tr.acct-click:hover{background:rgba(125,125,125,.06)}
+  tr.acct-click.open td:first-child::before{content:'▾ '}
+  tr.acct-click:not(.open) td:first-child::before{content:'▸ ';color:var(--viz-ink2)}
   .excluded{opacity:.68}
-  .dhead{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+  tr.drawer > td{padding:0;border-bottom:1px solid var(--hairline)}
+  .drawer-inner{background:var(--surface-2);border-radius:10px;margin:8px 6px 12px;padding:10px 12px}
+  .drawer-scroll{max-height:420px;overflow:auto}
+  .drawer-inner table{font-size:12.5px}
+  .drawer-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap}
+  .drawer-note{color:var(--viz-ink2);font-size:12px;margin-top:8px}
 </style>
 </head>
 <body>
@@ -86,24 +93,12 @@
   </div>
 
   <div id="cats"></div>
-
-  <div class="card" id="detailCard" style="display:none">
-    <div class="dhead">
-      <h2 id="dTitle"></h2>
-      <div><button class="btn" id="dCsv">Download CSV</button> <button class="btn" id="dClose">Close</button></div>
-    </div>
-    <div style="overflow-x:auto"><table>
-      <thead><tr><th>Date</th><th>Who / what</th><th>Type</th><th class="num">Amount</th><th>Detail</th></tr></thead>
-      <tbody id="dRows"></tbody>
-    </table></div>
-    <div class="dnote" id="dNote"></div>
-  </div>
 </div>
 <div id="tip"></div>
 
 <script src="/app.js"></script>
 <script>
-let mapData = null, dRowsData = [];
+let mapData = null;
 const QBO_PATH = { Bill: 'bill', Purchase: 'expense', Check: 'check', Deposit: 'deposit',
   BillPayment: 'billpayment', JournalEntry: 'journal', VendorCredit: 'vendorcredit' };
 function qboLink(type, id) {
@@ -248,7 +243,7 @@ async function load(force) {
     $('cats').innerHTML = h;
     if (d.countWarning) showBanner('<strong>Heads up.</strong> ' + escapeHtml(d.countWarning));
     document.querySelectorAll('.acct-click').forEach((tr) => {
-      tr.addEventListener('click', () => openAccount(tr.dataset.id, tr.dataset.name));
+      tr.addEventListener('click', () => toggleAccount(tr, tr.dataset.id, tr.dataset.name));
     });
   } catch (err) {
     if (err.message !== 'signed out') showBanner('<strong>Error.</strong> ' + escapeHtml(err.message));
@@ -256,53 +251,69 @@ async function load(force) {
   $('backLink').href = linkWithRange('/');
 }
 
-async function openAccount(id, name) {
-  $('detailCard').style.display = '';
-  $('dTitle').textContent = name + ' — transactions in this range';
-  $('dRows').innerHTML = '<tr><td colspan="5" class="empty">Loading…</td></tr>';
-  $('dNote').textContent = '';
-  $('detailCard').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+// Inline drawer: expands directly under the clicked account row; clicking the
+// row again (or the Close button) folds it back up. One drawer per row.
+function closeDrawer(tr) {
+  tr.classList.remove('open');
+  const next = tr.nextElementSibling;
+  if (next && next.classList.contains('drawer')) next.remove();
+}
+
+async function toggleAccount(tr, id, name) {
+  if (tr.classList.contains('open')) { closeDrawer(tr); return; }
+  tr.classList.add('open');
+  const drawer = document.createElement('tr');
+  drawer.className = 'drawer';
+  const cols = tr.children.length;
+  drawer.innerHTML = '<td colspan="' + cols + '"><div class="drawer-inner">' +
+    '<div class="drawer-bar"><strong>' + escapeHtml(name) + ' — transactions in this range</strong>' +
+    '<span><button class="btn btn-csv">Download CSV</button> <button class="btn btn-close">Close ▲</button></span></div>' +
+    '<div class="drawer-scroll"><table><thead><tr><th>Date</th><th>Who / what</th><th>Type</th><th class="num">Amount</th><th>Detail</th></tr></thead>' +
+    '<tbody><tr><td colspan="5" class="empty">Loading…</td></tr></tbody></table></div>' +
+    '<div class="drawer-note"></div></div></td>';
+  tr.after(drawer);
+  const tbody = drawer.querySelector('tbody');
+  const note = drawer.querySelector('.drawer-note');
+  let rowsData = [];
+  drawer.querySelector('.btn-close').addEventListener('click', () => closeDrawer(tr));
+  drawer.querySelector('.btn-csv').addEventListener('click', () => {
+    if (!rowsData.length) return;
+    const esc = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    const lines = ['Date,Name,Type,Amount,Detail'];
+    for (const r of rowsData) lines.push([r.date, r.name, r.txnType, r.amount, r.detail || ''].map(esc).join(','));
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name.replace(/[^\w]+/g, '-').toLowerCase() + '.csv';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
   try {
     const r = Range.get();
     const d = await jfetch('/api/expense-detail?account=' + encodeURIComponent(id) + '&start=' + r.start + '&end=' + r.end);
-    dRowsData = d.rows || [];
-    if (!dRowsData.length) {
-      $('dRows').innerHTML = '<tr><td colspan="5" class="empty">No API-visible transactions — this account moved via payroll or other activity QuickBooks does not expose. The balance change is still real; verify it in QuickBooks directly.</td></tr>';
+    rowsData = d.rows || [];
+    if (!rowsData.length) {
+      tbody.innerHTML = '<tr><td colspan="5" class="empty">No API-visible transactions — this account moved via payroll or other activity QuickBooks does not expose. The balance change is still real; verify it in QuickBooks directly.</td></tr>';
       return;
     }
     let h = '';
-    for (const row of dRowsData) {
+    for (const row of rowsData) {
       const link = qboLink(row.txnType, row.txnId);
       h += '<tr><td>' + row.date + '</td><td>' + escapeHtml(row.name) + '</td><td>' +
         (link ? '<a href="' + link + '" target="_blank">' + row.txnType + '</a>' : row.txnType) + '</td>' +
         '<td class="num' + (row.amount < 0 ? ' neg' : '') + '">' + usd2.format(row.amount) + '</td>' +
         '<td class="hint">' + escapeHtml(row.detail || '') + '</td></tr>';
     }
-    $('dRows').innerHTML = h;
-    $('dNote').textContent = 'Sum of listed transactions: ' + usd2.format(d.sum) +
+    tbody.innerHTML = h;
+    note.textContent = 'Sum of listed transactions: ' + usd2.format(d.sum) +
       '. If this differs from the balance change above, the gap is payroll/tax-center activity the API can’t show.';
   } catch (err) {
-    $('dRows').innerHTML = '<tr><td colspan="5" class="empty">' + escapeHtml(err.message) + '</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" class="empty">' + escapeHtml(err.message) + '</td></tr>';
   }
 }
 
-function downloadCsv() {
-  if (!dRowsData.length) return;
-  const esc = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
-  const lines = ['Date,Name,Type,Amount,Detail'];
-  for (const r of dRowsData) lines.push([r.date, r.name, r.txnType, r.amount, r.detail || ''].map(esc).join(','));
-  const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = ($('dTitle').textContent || 'account').replace(/[^\w]+/g, '-').toLowerCase() + '.csv';
-  a.click();
-  URL.revokeObjectURL(a.href);
-}
-
 async function init() {
-  mountRange((force) => { $('detailCard').style.display = 'none'; load(force); });
-  $('dClose').addEventListener('click', () => { $('detailCard').style.display = 'none'; });
-  $('dCsv').addEventListener('click', downloadCsv);
+  mountRange((force) => load(force));
   if (await checkStatus()) load(false);
 }
 init();
