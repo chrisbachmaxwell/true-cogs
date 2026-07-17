@@ -612,8 +612,11 @@ function monthsBetween(start: string, end: string): string[] {
 }
 
 function validRange(req: Request, res: Response): { start: string; end: string; months: string[] } | null {
-  const start = String(req.query.start || '');
-  const end = String(req.query.end || '');
+  // Accept full dates too (the shared range control sends YYYY-MM-DD since the
+  // day-level picker shipped) and reduce them to their months — this endpoint
+  // family works in month granularity.
+  const start = String(req.query.start || '').slice(0, 7);
+  const end = String(req.query.end || '').slice(0, 7);
   if (!/^\d{4}-\d{2}$/.test(start) || !/^\d{4}-\d{2}$/.test(end) || start > end) {
     res.status(400).json({ error: 'Provide ?start=YYYY-MM&end=YYYY-MM with start <= end' });
     return null;
@@ -1789,6 +1792,96 @@ app.get(
   })
 );
 
+// ---- Where the money went: the profit-to-bank proof as a report ----
+// Categorizes every balance-sheet move over the range using the rules proven
+// in the 2026-07-17 session (brain: concepts/profit-to-bank-proof.md):
+// NOI(cash income, count-adjusted COGS, books expenses) ≈ Δreal banks
+// + Δinventory(counts) + owner outflows + capex + old-liability paydowns
+// − new card/vendor financing. NO A/R, NO credit memos (never in cash income),
+// NO sales-tax-payable drift (no-accrual artifact), NO broken accounts
+// (sign-flipped Amex, negative Cash on Hand, fake clearing banks).
+
+app.get(
+  '/api/money-map',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const range = validDateRange(req, res);
+    if (!range) return;
+    const result = await dedupe(`mm:${range.start}:${range.end}`, async () => {
+      const api = await getComputeApi();
+      const stmt: any = await getStatement(range, false);
+      const cf = await computeCashFlow(api, dayBefore(range.start), range.end);
+      const beginCount = await countAsOf(range.start === range.end ? dayBefore(range.start) : range.start);
+      const endCount = await countAsOf(range.end);
+
+      type Cat = { key: string; label: string; note: string; inProof: boolean; total: number; accounts: any[] };
+      const cats: Record<string, Cat> = {};
+      const cat = (key: string, label: string, note: string, inProof: boolean): Cat =>
+        (cats[key] ??= { key, label, note, inProof, total: 0, accounts: [] });
+      const put = (c: Cat, m: any, amount: number) => {
+        c.accounts.push({ ...m, amount: Math.round(amount * 100) / 100 });
+        c.total = Math.round((c.total + amount) * 100) / 100;
+      };
+
+      const REAL_BANK = /zions|xions/i;
+      for (const m of cf.bankAccounts) {
+        if (REAL_BANK.test(m.name)) put(cat('banks', 'Bank accounts (real)', 'Zions checking and savings — the hardest number there is. Click through to the bank report to see every dollar in and out.', true), m, m.change);
+        else if (/federal estimated tax/i.test(m.name)) put(cat('owners', 'Money to the owners', 'Distributions, dividends, and personal tax prepayments (1040-ES).', true), m, m.change);
+        else put(cat('broken', 'Excluded — broken or artificial accounts', 'Movements here are bookkeeping artifacts, not money: the fake clearing banks, impossible negative cash, and the sign-flipped Amex history. Each needs a bookkeeper repair, not a P&L explanation.', false), m, m.change);
+      }
+      for (const m of cf.moves) {
+        const n = m.name.toLowerCase();
+        const use = -m.cashEffect; // profit parked: asset growth / liability paydown
+        if (/^(material inventory|boise inventory)$/i.test(m.name)) continue; // replaced by physical counts
+        if (/sales tax payable/i.test(m.name)) { put(cat('broken', 'Excluded — broken or artificial accounts', '', false), m, 0); continue; }
+        if (/amex.*009|platinum amex/i.test(m.name) || (m.type === 'Credit Card' && m.before < -500000)) { put(cat('broken', 'Excluded — broken or artificial accounts', '', false), m, 0); continue; }
+        if (/cash on hand|fraud/i.test(n)) { put(cat('broken', 'Excluded — broken or artificial accounts', '', false), m, 0); continue; }
+        if (m.type === 'Accounts Receivable' || /credit memo/i.test(n)) {
+          put(cat('owed', 'Owed to you (not profit yet)', 'Money coming toward you — unpaid invoices and the Boise credit-memo pipe. The P&L only counts cash that has landed, so this is NOT part of the profit being proven; it is future cash.', false), m, m.change);
+          continue;
+        }
+        if (m.type === 'Equity' && /dist|dividend|draw/i.test(n)) { put(cat('owners', 'Money to the owners', 'Distributions, dividends, and personal tax prepayments (1040-ES).', true), m, use); continue; }
+        if (/jens/i.test(n)) { put(cat('owners', 'Money to the owners', '', true), m, use); continue; }
+        if (m.type === 'Fixed Asset') { put(cat('capex', 'Built into the business', 'Store build-out, furniture, equipment — cash that became property.', true), m, use); continue; }
+        if (m.type === 'Credit Card' || m.type === 'Accounts Payable' || /w\/h|withhold|direct deposit|payroll.*payable/i.test(n)) {
+          put(cat('financing', 'Cards, vendors & payroll dues', 'Negative means they lent you more this period (money you got to use without earning it yet); positive means you paid old dues down.', true), m, use);
+          continue;
+        }
+        put(cat('other', 'Everything else on the balance sheet', 'Small accounts that moved; positive parks profit, negative frees it.', true), m, use);
+      }
+
+      const inventoryChange =
+        beginCount && endCount ? Math.round((endCount.value - beginCount.value) * 100) / 100 : null;
+      if (inventoryChange !== null) {
+        const c = cat('inventory', 'Inventory on the shelves', 'From your physical counts — the book inventory accounts are excluded because their values are broken.', true);
+        c.total = inventoryChange;
+        c.accounts.push({
+          id: null, name: 'Physical inventory (your counts)', acctNum: null, type: 'Counts',
+          before: beginCount!.value, after: endCount!.value, change: inventoryChange, amount: inventoryChange,
+          detail: `${beginCount!.asOf} → ${endCount!.asOf}`,
+        });
+      }
+
+      const order = ['banks', 'inventory', 'owners', 'capex', 'financing', 'other', 'owed', 'broken'];
+      const categories = order.filter((k) => cats[k]).map((k) => cats[k]);
+      for (const c of categories) c.accounts.sort((a, b) => Math.abs(b.amount || b.change) - Math.abs(a.amount || a.change));
+      const accounted = Math.round(categories.filter((c) => c.inProof).reduce((s, c) => s + c.total, 0) * 100) / 100;
+      const noi = stmt.adjusted ? stmt.adjusted.noi : stmt.noi;
+      return {
+        start: range.start,
+        end: range.end,
+        noi,
+        basis: stmt.adjusted ? 'accounting (physical counts)' : 'cash (no counts for this range)',
+        accounted,
+        residual: Math.round((noi - accounted) * 100) / 100,
+        categories,
+        countWarning: inventoryChange === null ? 'No inventory counts near this range — inventory movement is missing from the proof.' : null,
+      };
+    });
+    res.json(result);
+  })
+);
+
 /** The books' accrual P&L, sectioned — read-only diagnostic for comparing the
  * app's cash-verified statement against what QuickBooks itself reports. */
 app.get(
@@ -1891,6 +1984,7 @@ app.get(['/', '/index.html'], requireAuth, (_req, res) => res.sendFile(pub('inde
 app.get('/pnl', requireAuth, (_req, res) => res.sendFile(pub('pnl.html')));
 app.get('/bank', requireAuth, (_req, res) => res.sendFile(pub('bank.html')));
 app.get('/cashflow', requireAuth, (_req, res) => res.sendFile(pub('cashflow.html')));
+app.get('/money', requireAuth, (_req, res) => res.sendFile(pub('money.html')));
 app.get('/inventory', requireAuth, (_req, res) => res.sendFile(pub('inventory.html')));
 app.get('/checks', requireAuth, (_req, res) => res.sendFile(pub('checks.html')));
 app.get('/cleanup', requireAuth, (_req, res) => res.sendFile(pub('cleanup.html')));

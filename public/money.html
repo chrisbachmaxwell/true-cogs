@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Where the Money Went · Pictureline</title>
+<link rel="stylesheet" href="/theme.css">
+<style>
+  .kpis3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:18px 0}
+  .big{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums}
+  .cat{margin-top:22px}
+  .cat h2{display:flex;justify-content:space-between;align-items:baseline}
+  .cat h2 .num{font-variant-numeric:tabular-nums}
+  .catnote{color:var(--ink-2);font-size:13px;margin:2px 0 10px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  td,th{padding:7px 10px;border-bottom:1px solid var(--hairline);text-align:left}
+  .num{text-align:right;font-variant-numeric:tabular-nums}
+  .neg{color:var(--bad)}
+  tr.acct-click{cursor:pointer}
+  tr.acct-click:hover{background:var(--hover,rgba(125,125,125,.06))}
+  .excluded{opacity:.65}
+  .dhead{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+</style>
+</head>
+<body>
+<div class="topbar"><div class="topbar-inner">
+  <a class="brand" href="/">Pictureline <span>Cash Reports</span></a>
+  <a class="crumb" id="backLink" href="/">← All reports</a>
+  <div class="spacer"></div>
+  <a class="crumb" href="/auth/logout">Sign out</a>
+</div></div>
+
+<div class="wrap">
+  <h1 class="title">Where the Money Went</h1>
+  <p class="subtitle">Every dollar of profit traced to where it sits — bank, shelves, owners, building · click any account to see its transactions · <span id="rangeLabel"></span></p>
+  <div id="rangeBox"></div>
+  <div class="banner" id="banner"></div>
+
+  <div class="kpis3">
+    <div class="kpi"><div class="k-label">Profit claimed (P&amp;L)</div><div class="big" id="kNoi">—</div><div class="k-note" id="kBasis"></div></div>
+    <div class="kpi"><div class="k-label">Traced to real places</div><div class="big" id="kAcc">—</div><div class="k-note" id="kAccPct"></div></div>
+    <div class="kpi"><div class="k-label">Not yet traceable</div><div class="big" id="kRes">—</div><div class="k-note">Lives behind the broken accounts below until they're repaired</div></div>
+  </div>
+
+  <div id="cats"></div>
+
+  <div class="card" id="detailCard" style="display:none">
+    <div class="dhead">
+      <h2 id="dTitle"></h2>
+      <div><button class="btn" id="dCsv">Download CSV</button> <button class="btn" id="dClose">Close</button></div>
+    </div>
+    <div style="overflow-x:auto"><table>
+      <thead><tr><th>Date</th><th>Who / what</th><th>Type</th><th class="num">Amount</th><th>Detail</th></tr></thead>
+      <tbody id="dRows"></tbody>
+    </table></div>
+    <div class="dnote" id="dNote"></div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+<script>
+let mapData = null, dRowsData = [];
+const QBO_PATH = { Bill: 'bill', Purchase: 'expense', Check: 'check', Deposit: 'deposit',
+  BillPayment: 'billpayment', JournalEntry: 'journal', VendorCredit: 'vendorcredit' };
+function qboLink(type, id) {
+  const p = QBO_PATH[type];
+  return p && id ? 'https://qbo.intuit.com/app/' + p + '?txnId=' + encodeURIComponent(id) : null;
+}
+
+async function load(force) {
+  const fresh = staleGuard();
+  setLoading(true);
+  try {
+    const d = await jfetch('/api/money-map?' + Range.qs() + (force ? '&refresh=1' : ''));
+    if (!fresh()) return;
+    mapData = d;
+    $('kNoi').textContent = usd.format(d.noi);
+    $('kBasis').textContent = d.basis;
+    $('kAcc').textContent = usd.format(d.accounted);
+    $('kAccPct').textContent = d.noi ? Math.round((d.accounted / d.noi) * 100) + '% of the claim' : '';
+    $('kRes').textContent = usd.format(d.residual);
+    $('kRes').classList.toggle('neg', Math.abs(d.residual) > Math.abs(d.noi) * 0.15);
+    let h = '';
+    for (const c of d.categories) {
+      const excluded = !c.inProof;
+      h += '<div class="card cat' + (excluded ? ' excluded' : '') + '"><h2>' + escapeHtml(c.label) +
+        '<span class="num">' + (excluded ? '' : usd.format(c.total)) + '</span></h2>' +
+        (c.note ? '<div class="catnote">' + escapeHtml(c.note) + '</div>' : '') +
+        '<div style="overflow-x:auto"><table><thead><tr><th>Account</th><th class="num">Start</th><th class="num">End</th><th class="num">' +
+        (excluded ? 'Moved' : 'Profit parked') + '</th></tr></thead><tbody>';
+      for (const a of c.accounts) {
+        const amt = c.inProof ? a.amount : a.change;
+        const clickable = a.id !== null && a.type !== 'Counts';
+        h += '<tr' + (clickable ? ' class="acct-click" data-id="' + a.id + '" data-name="' + escapeHtml(a.name) + '"' : '') + '>' +
+          '<td>' + escapeHtml(a.name) + (a.detail ? ' <span class="hint">' + escapeHtml(a.detail) + '</span>' : '') + '</td>' +
+          '<td class="num">' + usd.format(a.before) + '</td><td class="num">' + usd.format(a.after) + '</td>' +
+          '<td class="num' + (amt < 0 ? ' neg' : '') + '">' + usd.format(amt) + '</td></tr>';
+      }
+      h += '</tbody></table></div></div>';
+    }
+    $('cats').innerHTML = h;
+    if (d.countWarning) showBanner('<strong>Heads up.</strong> ' + escapeHtml(d.countWarning));
+    document.querySelectorAll('.acct-click').forEach((tr) => {
+      tr.addEventListener('click', () => openAccount(tr.dataset.id, tr.dataset.name));
+    });
+  } catch (err) {
+    if (err.message !== 'signed out') showBanner('<strong>Error.</strong> ' + escapeHtml(err.message));
+  } finally { setLoading(false); }
+  $('backLink').href = linkWithRange('/');
+}
+
+async function openAccount(id, name) {
+  $('detailCard').style.display = '';
+  $('dTitle').textContent = name + ' — transactions in this range';
+  $('dRows').innerHTML = '<tr><td colspan="5" class="empty">Loading…</td></tr>';
+  $('dNote').textContent = '';
+  $('detailCard').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  try {
+    const r = Range.get();
+    const d = await jfetch('/api/expense-detail?account=' + encodeURIComponent(id) + '&start=' + r.start + '&end=' + r.end);
+    dRowsData = d.rows || [];
+    if (!dRowsData.length) {
+      $('dRows').innerHTML = '<tr><td colspan="5" class="empty">No API-visible transactions — this account moved via payroll or other activity QuickBooks does not expose. The balance change is still real; verify it in QuickBooks directly.</td></tr>';
+      return;
+    }
+    let h = '';
+    for (const row of dRowsData) {
+      const link = qboLink(row.txnType, row.txnId);
+      h += '<tr><td>' + row.date + '</td><td>' + escapeHtml(row.name) + '</td><td>' +
+        (link ? '<a href="' + link + '" target="_blank">' + row.txnType + '</a>' : row.txnType) + '</td>' +
+        '<td class="num' + (row.amount < 0 ? ' neg' : '') + '">' + usd2.format(row.amount) + '</td>' +
+        '<td class="hint">' + escapeHtml(row.detail || '') + '</td></tr>';
+    }
+    $('dRows').innerHTML = h;
+    $('dNote').textContent = 'Sum of listed transactions: ' + usd2.format(d.sum) +
+      '. If this differs from the balance change above, the gap is payroll/tax-center activity the API can’t show.';
+  } catch (err) {
+    $('dRows').innerHTML = '<tr><td colspan="5" class="empty">' + escapeHtml(err.message) + '</td></tr>';
+  }
+}
+
+function downloadCsv() {
+  if (!dRowsData.length) return;
+  const esc = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+  const lines = ['Date,Name,Type,Amount,Detail'];
+  for (const r of dRowsData) lines.push([r.date, r.name, r.txnType, r.amount, r.detail || ''].map(esc).join(','));
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = ($('dTitle').textContent || 'account').replace(/[^\w]+/g, '-').toLowerCase() + '.csv';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+async function init() {
+  mountRange((force) => { $('detailCard').style.display = 'none'; load(force); });
+  $('dClose').addEventListener('click', () => { $('detailCard').style.display = 'none'; });
+  $('dCsv').addEventListener('click', downloadCsv);
+  if (await checkStatus()) load(false);
+}
+init();
+</script>
+</body>
+</html>

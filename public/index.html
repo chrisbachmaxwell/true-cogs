@@ -38,9 +38,9 @@
       <div class="icon green">⇅</div>
       <div><div class="t-name">Bank Reconciliation</div><div class="t-desc">Money in vs money out, tied to actual bank change</div></div>
     </a>
-    <a class="tile" id="lnkCash" href="/cashflow">
+    <a class="tile" id="lnkCash" href="/money">
       <div class="icon purple">◔</div>
-      <div><div class="t-name">Where the Cash Went</div><div class="t-desc">Balance-sheet movements — inventory, cards, taxes, owners</div></div>
+      <div><div class="t-name">Where the Money Went</div><div class="t-desc">Profit traced to bank, shelves, owners &amp; building — drillable to every transaction</div></div>
     </a>
     <a class="tile" id="lnkInv" href="/inventory">
       <div class="icon orange">▥</div>
@@ -82,7 +82,7 @@ async function load() {
   } finally {
     setLoading(false);
   }
-  for (const [id, path] of [['lnkPnl','/pnl'],['lnkBank','/bank'],['lnkCash','/cashflow'],['lnkInv','/inventory'],['lnkChecks','/checks']]) {
+  for (const [id, path] of [['lnkPnl','/pnl'],['lnkBank','/bank'],['lnkCash','/money'],['lnkInv','/inventory'],['lnkChecks','/checks']]) {
     $(id).href = linkWithRange(path);
   }
 }
