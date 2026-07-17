@@ -7,7 +7,7 @@ import { computeMonthlySpend, MonthlySpendResult, SpendOptions } from './invento
 import { computeMonthlyPnl, MonthlyPnl, PnlContext } from './pnl';
 import { computePnlDetail, expenseAccountDetail, DetailRow } from './pnlDetail';
 import { computeCashFlow, reportBalances } from './cashflow';
-import { runSync, syncIfStale, syncStatus, isStoreFresh, makeLocalApi, upsertTxns } from './sync';
+import { mirrorChangedSince, runSync, syncIfStale, syncStatus, isStoreFresh, makeLocalApi, upsertTxns } from './sync';
 import { planReclassify, planRevert } from './reclassify';
 import fs from 'fs';
 import { bankFlowDetail, computeBankFlow } from './bankflow';
@@ -301,7 +301,10 @@ async function getMonthlySpend(
     if (cached) {
       const isClosedMonth = month < currentMonthUtc();
       const fresh = Date.now() - new Date(cached.computedAt).getTime() < CURRENT_MONTH_CACHE_TTL_MS;
-      if (isClosedMonth || fresh) return cached.data as MonthlySpendResult;
+      const { start, end } = monthDateRange(month);
+      if ((isClosedMonth || fresh) && !(await mirrorChangedSince(start, end, new Date(cached.computedAt)))) {
+        return cached.data as MonthlySpendResult;
+      }
     }
     const inFlight = inFlightMonths.get(cacheKey);
     if (inFlight) return inFlight;
@@ -534,7 +537,10 @@ async function getMonthlyPnl(month: string, forceRefresh: boolean): Promise<Mont
     if (cached) {
       const isClosedMonth = month < currentMonthUtc();
       const fresh = Date.now() - new Date(cached.computedAt).getTime() < CURRENT_MONTH_CACHE_TTL_MS;
-      if (isClosedMonth || fresh) return cached.data as MonthlyPnl;
+      const { start, end } = monthDateRange(month);
+      if ((isClosedMonth || fresh) && !(await mirrorChangedSince(start, end, new Date(cached.computedAt)))) {
+        return cached.data as MonthlyPnl;
+      }
     }
     const inFlight = inFlightPnl.get(cacheKey);
     if (inFlight) return inFlight;
@@ -738,7 +744,11 @@ app.get(
     if (req.query.refresh !== '1') {
       const cached = await getCachedMonth(cacheKey);
       const endIsClosed = range.end < currentMonthUtc();
-      if (cached && (endIsClosed || Date.now() - new Date(cached.computedAt).getTime() < CURRENT_MONTH_CACHE_TTL_MS)) {
+      if (
+        cached &&
+        (endIsClosed || Date.now() - new Date(cached.computedAt).getTime() < CURRENT_MONTH_CACHE_TTL_MS) &&
+        !(await mirrorChangedSince(asOfStart, asOfEnd, new Date(cached.computedAt)))
+      ) {
         return res.json(cached.data);
       }
     }
@@ -766,7 +776,11 @@ app.get(
     if (req.query.refresh !== '1') {
       const cached = await getCachedMonth(cacheKey);
       const endIsClosed = range.end < currentMonthUtc();
-      if (cached && (endIsClosed || Date.now() - new Date(cached.computedAt).getTime() < CURRENT_MONTH_CACHE_TTL_MS)) {
+      if (
+        cached &&
+        (endIsClosed || Date.now() - new Date(cached.computedAt).getTime() < CURRENT_MONTH_CACHE_TTL_MS) &&
+        !(await mirrorChangedSince(startDate, endDate, new Date(cached.computedAt)))
+      ) {
         return res.json(cached.data);
       }
     }
@@ -1004,9 +1018,18 @@ async function getStatement(range: { start: string; end: string }, force: boolea
   if (!force) {
     const cached = await getCachedMonth(cacheKey);
     const closed = range.end < new Date().toISOString().slice(0, 10);
-    if (cached && (closed || Date.now() - new Date(cached.computedAt).getTime() < CURRENT_MONTH_CACHE_TTL_MS)) {
+    if (
+      cached &&
+      (closed || Date.now() - new Date(cached.computedAt).getTime() < CURRENT_MONTH_CACHE_TTL_MS) &&
+      !(await mirrorChangedSince(range.start, range.end, new Date(cached.computedAt)))
+    ) {
       return cached.data;
     }
+  } else {
+    // Refresh means "get the latest from QuickBooks", not just recompute:
+    // pull edits into the mirror first so a hand-recategorized transaction
+    // shows up immediately instead of after the next scheduled sync.
+    try { await runSync(false); } catch { /* recompute from the current mirror */ }
   }
   return dedupe(cacheKey, async () => {
       const api = await getComputeApi();

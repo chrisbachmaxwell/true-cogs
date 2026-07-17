@@ -170,3 +170,21 @@ export function makeLocalApi(remote: QboApi): QboApi {
     profitAndLoss: (s, e) => remote.profitAndLoss(s, e),
   };
 }
+
+/** True if any mirrored transaction dated inside [start, end] has been edited
+ * in QuickBooks since `computedAt` — used to auto-invalidate cached results
+ * when Chris recategorizes history. (Edits that MOVE a transaction out of the
+ * range or hard-delete it are invisible to this check; the Refresh button and
+ * full syncs remain the backstop for those.) */
+export async function mirrorChangedSince(start: string, end: string, computedAt: Date): Promise<boolean> {
+  try {
+    const r = await getPool().query(
+      `SELECT max(last_updated) AS m FROM qbo_txns WHERE txn_date BETWEEN $1 AND $2`,
+      [start, end]
+    );
+    const m = r.rows[0]?.m;
+    return m !== null && m !== undefined && new Date(m) > computedAt;
+  } catch {
+    return false; // if the mirror is unreachable the cache is the best we have
+  }
+}
