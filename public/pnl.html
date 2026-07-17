@@ -19,6 +19,12 @@
   .qlink:hover { text-decoration: underline; }
   tr.exp-click { cursor: pointer; }
   tr.exp-click:hover td { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+  .srow.open, tr.exp-click.open td { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  .card.drawer-mode { background: var(--surface-2); box-shadow: none; border: 1px solid var(--hairline);
+    margin: 8px 0 12px; padding: 14px 16px; }
+  .card.drawer-mode table { font-size: 12.5px; }
+  .card.drawer-mode .dscroll { max-height: 440px; overflow: auto; }
+  tr.dhost > td { padding: 0; border-bottom: none; }
 </style>
 </head>
 <body>
@@ -44,19 +50,23 @@
     <div class="warnings" id="warnings"></div>
   </div>
 
-  <div class="card" id="detailCard" style="display:none">
-    <div class="dhead">
-      <h2 id="dTitle"></h2>
-      <button class="btn" id="dBack" style="display:none">← Categories</button>
-      <button class="btn" id="dCsv">Download CSV</button>
-      <button class="btn" id="dClose">Close</button>
+  <!-- The drill-down drawer: relocated inline under whatever was clicked;
+       parked here (hidden) whenever it's closed so re-renders can't destroy it. -->
+  <div id="detailPark" style="display:none">
+    <div class="card drawer-mode" id="detailCard">
+      <div class="dhead">
+        <h2 id="dTitle"></h2>
+        <button class="btn" id="dBack" style="display:none">← Categories</button>
+        <button class="btn" id="dCsv">Download CSV</button>
+        <button class="btn" id="dClose">Close ▲</button>
+      </div>
+      <div style="overflow-x:auto"><table>
+        <thead id="dHead"></thead>
+        <tbody id="dRows"></tbody>
+      </table></div>
+      <div class="dcheck" id="dCheck" style="display:none"></div>
+      <div class="dnote" id="dNote"></div>
     </div>
-    <div style="overflow-x:auto"><table>
-      <thead id="dHead"></thead>
-      <tbody id="dRows"></tbody>
-    </table></div>
-    <div class="dcheck" id="dCheck" style="display:none"></div>
-    <div class="dnote" id="dNote"></div>
   </div>
 
   <div class="card">
@@ -131,16 +141,51 @@ function expectedFor(key) {
 // vendor, or customer); clicking a category shows its transactions.
 let dState = null; // { label, rows, groups, mode: 'groups'|'rows', group, expected, note, kind }
 
-function showPanel(title) {
+// ---- inline drawer plumbing: the ONE detail card relocates to sit directly
+// under whatever was clicked, and parks (hidden) when closed so statement and
+// table re-renders can never destroy it.
+let drawerAnchor = null;
+
+function parkDrawer() {
   const card = $('detailCard');
-  card.style.display = '';
+  const host = document.querySelector('tr.dhost');
+  $('detailPark').appendChild(card);
+  if (host) host.remove();
+  if (drawerAnchor) drawerAnchor.classList.remove('open');
+  drawerAnchor = null;
+  dState = null;
+  detailSeq++;
+}
+
+/** Places the drawer under anchorEl. Returns false if this click should just
+ * CLOSE it (same anchor toggled). */
+function attachDrawer(anchorEl) {
+  if (drawerAnchor === anchorEl) { parkDrawer(); return false; }
+  parkDrawer();
+  const card = $('detailCard');
+  if (anchorEl.tagName === 'TR') {
+    const host = document.createElement('tr');
+    host.className = 'dhost';
+    const td = document.createElement('td');
+    td.colSpan = anchorEl.children.length;
+    host.appendChild(td);
+    anchorEl.after(host);
+    td.appendChild(card);
+  } else {
+    anchorEl.after(card);
+  }
+  anchorEl.classList.add('open');
+  drawerAnchor = anchorEl;
+  return true;
+}
+
+function showPanel(title) {
   $('dTitle').textContent = title;
   $('dHead').innerHTML = '';
   $('dRows').innerHTML = '<tr><td colspan="4" class="empty">Loading…</td></tr>';
   $('dCheck').style.display = 'none';
   $('dBack').style.display = 'none';
   $('dNote').textContent = '';
-  card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 function groupRows(rows) {
@@ -384,6 +429,7 @@ function renderCompare(a, b, labelA, labelB) {
 }
 
 async function load(force) {
+  parkDrawer(); // the statement and expense tables re-render — never let them eat the drawer
   const fresh = staleGuard();
   setLoading(true);
   try {
@@ -461,7 +507,10 @@ async function load(force) {
       tr.innerHTML = '<td>' + escapeHtml(e.name) + (e.id ? '' : '<span class="detail">summary row</span>') + '</td><td class="num">' + usd2.format(e.amount) + '</td>';
       if (e.id) {
         tr.className = 'exp-click';
-        tr.addEventListener('click', () => openExpenseDetail(e.id, e.name, e.amount));
+        tr.addEventListener('click', () => {
+          if (!attachDrawer(tr)) return; // toggle closed on second click
+          openExpenseDetail(e.id, e.name, e.amount);
+        });
       }
       rows.appendChild(tr);
     }
@@ -511,14 +560,15 @@ async function saveCount() {
 
 async function init() {
   cmpSetup();
-  mountRange((force) => { $('detailCard').style.display = 'none'; dState = null; detailSeq++; load(force); });
+  mountRange((force) => { parkDrawer(); load(force); });
   $('icSave').addEventListener('click', saveCount);
-  $('dClose').addEventListener('click', () => { $('detailCard').style.display = 'none'; dState = null; detailSeq++; });
+  $('dClose').addEventListener('click', parkDrawer);
   $('dCsv').addEventListener('click', downloadCsv);
   $('dBack').addEventListener('click', goBack);
   $('stmt').addEventListener('click', (e) => {
     const el = e.target.closest('.srow.click');
     if (!el) return;
+    if (!attachDrawer(el)) return; // second click on the same row folds it up
     if (el.dataset.key === 'expensesBooks') openExpenseBreakdown();
     else openDetail(el.dataset.key, el.dataset.label.replace(/&amp;/g, '&'));
   });
