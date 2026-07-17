@@ -1366,6 +1366,7 @@ const CLEANUP_TASKS: Record<string, { file: string; from: 'inventory' | string; 
   // Token is the account NUMBER: resolveAccounts matches AcctNum/Name exactly,
   // and the account's Name is just "Payroll Expenses".
   'tax-pulls-2023': { file: 'tax-pulls-2023.json', from: '66000' },
+  'tax-pulls-2024': { file: 'tax-pulls-2024.json', from: '66000' },
   'ach-stragglers': { file: 'ach-stragglers.json', from: 'inventory', defaultTo: 'ACH' },
 };
 
