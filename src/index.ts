@@ -528,7 +528,7 @@ const inFlightPnl = new Map<string, Promise<MonthlyPnl>>();
 
 async function getMonthlyPnl(month: string, forceRefresh: boolean): Promise<MonthlyPnl> {
   const { opts: spendOpts, cachePrefix } = await getSpendOpts(await getComputeApi());
-  const cacheKey = `${cachePrefix}pnl:${month}`;
+  const cacheKey = `${cachePrefix}pnl2:${month}`;
   if (!forceRefresh) {
     const cached = await getCachedMonth(cacheKey);
     if (cached) {
@@ -934,7 +934,7 @@ app.post(
       [asOf, value, req.body?.note || null]
     );
     // Adjusted statements depend on counts — drop cached statements.
-    await getPool().query(`DELETE FROM monthly_cache WHERE month LIKE 'stmt:%'`);
+    await getPool().query(`DELETE FROM monthly_cache WHERE month LIKE '%stmt2:%'`);
     res.json({ ok: true });
   })
 );
@@ -946,7 +946,7 @@ app.delete(
     const asOf = String(req.query.asOf || '');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(asOf)) return res.status(400).json({ error: 'Provide ?asOf=YYYY-MM-DD' });
     await getPool().query(`DELETE FROM inventory_counts WHERE as_of = $1`, [asOf]);
-    await getPool().query(`DELETE FROM monthly_cache WHERE month LIKE 'stmt:%'`);
+    await getPool().query(`DELETE FROM monthly_cache WHERE month LIKE '%stmt2:%'`);
     res.json({ ok: true });
   })
 );
@@ -977,7 +977,7 @@ async function getPnlCtx(api: QboApi): Promise<PnlContext & { accountNames: Map<
  * the other range endpoints; also the data source for /api/checks. */
 async function getStatement(range: { start: string; end: string }, force: boolean): Promise<any> {
   const { opts: spendOpts, cachePrefix } = await getSpendOpts(await getComputeApi());
-  const cacheKey = `${cachePrefix}stmt:${range.start}:${range.end}`;
+  const cacheKey = `${cachePrefix}stmt2:${range.start}:${range.end}`;
   if (!force) {
     const cached = await getCachedMonth(cacheKey);
     const closed = range.end < new Date().toISOString().slice(0, 10);
@@ -1080,6 +1080,7 @@ async function getStatement(range: { start: string; end: string }, force: boolea
           invoicePayments: pnl.retailCashIn.invoicePayments,
           salesReceipts: pnl.retailCashIn.salesReceipts,
           refunds: pnl.retailCashIn.refunds,
+          feedRefunds: pnl.retailCashIn.feedRefunds,
           salesTaxRemitted: pnl.salesTaxRemitted,
           netRevenue: pnl.revenueNet,
         },
@@ -1184,7 +1185,7 @@ app.get(
       return res.json({ line, rows: result.rows, sum: result.sum, note });
     }
 
-    const incomeLines = ['deposits', 'invoicePayments', 'salesReceipts', 'refunds', 'rebates', 'reimbursements'];
+    const incomeLines = ['deposits', 'invoicePayments', 'salesReceipts', 'refunds', 'feedRefunds', 'rebates', 'reimbursements'];
     if (incomeLines.includes(line)) {
       const detail = await getPnlDetailFor(range);
       const rows = (detail as any)[line] as DetailRow[];
