@@ -793,6 +793,107 @@ app.get(
   })
 );
 
+/** Twin-matcher for double-recorded card paydowns: pairs each dedicated
+ * pay-down-card transaction (CreditCardPayment) with the bank-side Purchase
+ * coded to the same card for the same money. Read-only diagnostic — produces
+ * the worklist, changes nothing in QuickBooks. */
+app.get(
+  '/api/card-dupe-match',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const accountId = String(req.query.account || '');
+    if (!accountId) return res.status(400).json({ error: 'Provide ?account=<cardAccountId>' });
+    const start = String(req.query.start || '2020-01-01');
+    const end = String(req.query.end || new Date().toISOString().slice(0, 10));
+    const api = await getComputeApi();
+
+    type Side = { id: string; date: string; amount: number; who: string; memo: string; matched?: boolean };
+    const ccps: Side[] = [];
+    for (const ccp of await api.queryByDateRange('CreditCardPayment', start, end)) {
+      if (String(ccp.CreditCardAccountRef?.value) !== accountId) continue;
+      ccps.push({
+        id: String(ccp.Id),
+        date: ccp.TxnDate || '',
+        amount: Math.round((Number(ccp.Amount) || 0) * 100) / 100,
+        who: ccp.BankAccountRef?.name || '',
+        memo: ccp.PrivateNote || '',
+      });
+    }
+    const purchases: Side[] = [];
+    for (const p of await api.queryByDateRange('Purchase', start, end)) {
+      if (String(p.AccountRef?.value) === accountId) continue; // the card's own charges, not paydowns
+      if (p.Credit === true) continue;
+      let coded = 0;
+      for (const line of p.Line || []) {
+        if (
+          line.DetailType === 'AccountBasedExpenseLineDetail' &&
+          String(line.AccountBasedExpenseLineDetail?.AccountRef?.value) === accountId
+        )
+          coded += Number(line.Amount) || 0;
+      }
+      if (coded <= 0.005) continue;
+      purchases.push({
+        id: String(p.Id),
+        date: p.TxnDate || '',
+        amount: Math.round(coded * 100) / 100,
+        who: p.AccountRef?.name || '',
+        memo: [p.EntityRef?.name, p.PrivateNote].filter(Boolean).join(' — '),
+      });
+    }
+
+    const dayDiff = (a: string, b: string) =>
+      Math.abs((new Date(`${a}T00:00:00Z`).getTime() - new Date(`${b}T00:00:00Z`).getTime()) / 86400000);
+    // Tightest pass first so each transaction pairs with its nearest twin;
+    // later passes only see what earlier passes left unmatched.
+    const passes = [
+      { grade: 'A', amountTol: 0.01, days: 3 },
+      { grade: 'B', amountTol: 0.01, days: 14 },
+      { grade: 'C', amountTol: 1.0, days: 14 },
+      { grade: 'D', amountTol: 0.01, days: 45 },
+    ];
+    const pairs: any[] = [];
+    for (const pass of passes) {
+      const cands: { c: Side; p: Side; dd: number }[] = [];
+      for (const c of ccps) {
+        if (c.matched) continue;
+        for (const p of purchases) {
+          if (p.matched) continue;
+          if (Math.abs(c.amount - p.amount) > pass.amountTol) continue;
+          const dd = dayDiff(c.date, p.date);
+          if (dd > pass.days) continue;
+          cands.push({ c, p, dd });
+        }
+      }
+      cands.sort((x, y) => x.dd - y.dd || Math.abs(x.c.amount - x.p.amount) - Math.abs(y.c.amount - y.p.amount));
+      for (const cand of cands) {
+        if (cand.c.matched || cand.p.matched) continue;
+        cand.c.matched = cand.p.matched = true;
+        pairs.push({ grade: pass.grade, daysApart: cand.dd, amount: cand.c.amount, ccp: cand.c, purchase: cand.p });
+      }
+    }
+    const sum = (rows: Side[]) => Math.round(rows.reduce((s, r) => s + r.amount, 0) * 100) / 100;
+    const strip = ({ matched, ...rest }: Side) => rest;
+    res.json({
+      account: accountId,
+      start,
+      end,
+      pairs: pairs.map((pr) => ({ ...pr, ccp: strip(pr.ccp), purchase: strip(pr.purchase) })),
+      unmatchedCcps: ccps.filter((c) => !c.matched).map(strip),
+      unmatchedPurchases: purchases.filter((p) => !p.matched).map(strip),
+      totals: {
+        ccpCount: ccps.length,
+        ccpTotal: sum(ccps),
+        purchaseCount: purchases.length,
+        purchaseTotal: sum(purchases),
+        pairCount: pairs.length,
+        pairedTotal: Math.round(pairs.reduce((s, p) => s + p.amount, 0) * 100) / 100,
+        unmatchedCcpTotal: sum(ccps.filter((c) => !c.matched)),
+        unmatchedPurchaseTotal: sum(purchases.filter((p) => !p.matched)),
+      },
+    });
+  })
+);
+
 /** Transactions behind one line of the bank report — same predicates as the
  * report itself, so every drawer sums to its line. */
 app.get(
