@@ -800,6 +800,42 @@ app.get(
   })
 );
 
+/** Net register movement for an account over a range, measured from mirrored
+ * transactions (same math as /api/register-history): positive = owed grew.
+ * Used where the books' balance level is broken but the period's movement is
+ * verified accurate (the 2025+ card registers, post 2026-07-17 repair). */
+async function registerMovement(api: QboApi, accountId: string, start: string, end: string): Promise<number> {
+  const id = String(accountId);
+  let net = 0;
+  for (const p of await api.queryByDateRange('Purchase', start, end)) {
+    const sign = p.Credit === true ? -1 : 1;
+    if (String(p.AccountRef?.value) === id) net += sign * (Number(p.TotalAmt) || 0);
+    for (const line of p.Line || []) {
+      if (line.DetailType === 'AccountBasedExpenseLineDetail' && String(line.AccountBasedExpenseLineDetail?.AccountRef?.value) === id)
+        net -= sign * (Number(line.Amount) || 0);
+    }
+  }
+  for (const bp of await api.queryByDateRange('BillPayment', start, end)) {
+    if (String(bp.CreditCardPayment?.CCAccountRef?.value) === id) net += Number(bp.TotalAmt) || 0;
+  }
+  for (const ccp of await api.queryByDateRange('CreditCardPayment', start, end)) {
+    if (String(ccp.CreditCardAccountRef?.value) === id) net -= Number(ccp.Amount) || 0;
+    if (String(ccp.BankAccountRef?.value) === id) net += Number(ccp.Amount) || 0;
+  }
+  for (const je of await api.queryByDateRange('JournalEntry', start, end)) {
+    for (const l of je.Line || []) {
+      const d = l.JournalEntryLineDetail;
+      if (d && String(d.AccountRef?.value) === id) net += (d.PostingType === 'Credit' ? 1 : -1) * (Number(l.Amount) || 0);
+    }
+  }
+  for (const dep of await api.queryByDateRange('Deposit', start, end)) {
+    for (const line of dep.Line || []) {
+      if (String(line.DepositLineDetail?.AccountRef?.value) === id) net -= Number(line.Amount) || 0;
+    }
+  }
+  return Math.round(net * 100) / 100;
+}
+
 /** Twin-matcher for double-recorded card paydowns: pairs each dedicated
  * pay-down-card transaction (CreditCardPayment) with the bank-side Purchase
  * coded to the same card for the same money. Read-only diagnostic — produces
@@ -2144,6 +2180,28 @@ app.get(
           continue;
         }
         put(cat('other', 'Everything else on the balance sheet', 'Small accounts that moved; positive parks profit, negative frees it.', true), m, use);
+      }
+
+      // The broken Amex register and the invisible "Credit Cards" wash account:
+      // their book balances are unusable, but the PERIOD MOVEMENT is verified
+      // accurate from 2025 on (2026-07-17 repair session) — measure it from
+      // the mirrored transactions so card money stops vanishing from the proof.
+      if (range.start >= '2025-01-01') {
+        const MEASURED_CARDS = [
+          { id: '63', name: 'PLATINUM Amex (measured from transactions)' },
+          { id: '99', name: 'Credit Cards wash account (measured)' },
+        ];
+        for (const spec of MEASURED_CARDS) {
+          const net = await registerMovement(api, spec.id, range.start, range.end);
+          if (Math.abs(net) > 0.005) {
+            const m = {
+              id: spec.id, name: spec.name, acctNum: null, type: 'Credit Card',
+              before: null, after: null, change: net,
+              detail: 'Book balance is broken for this account, so this period’s movement is rebuilt from the actual transactions (verified accurate for 2025 onward). Positive change = the card lent you more; negative = you paid old card debt down.',
+            };
+            put(cat('financing', 'Cards & payroll dues', 'Negative means they lent you more this period (money you got to use without earning it yet); positive means you paid old dues down.', true), m, -net);
+          }
+        }
       }
 
       const inventoryChange =
