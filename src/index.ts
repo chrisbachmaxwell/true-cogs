@@ -3,7 +3,7 @@ import path from 'path';
 import { config, missingQboConfig } from './config';
 import { initDb, getConfigValue, setConfigValue, getCachedMonth, setCachedMonth, getPool } from './db';
 import { buildAuthUri, handleCallback, createQboApi, connectionStatus, QboApi } from './qbo';
-import { computeMonthlySpend, computePurchasesSettled, inventoryPortionOfLines, MonthlySpendResult, SpendOptions } from './inventorySpend';
+import { computeMonthlySpend, MonthlySpendResult, SpendOptions } from './inventorySpend';
 import { computeMonthlyPnl, MonthlyPnl, PnlContext } from './pnl';
 import { computePnlDetail, expenseAccountDetail, DetailRow } from './pnlDetail';
 import { computeCashFlow, reportBalances } from './cashflow';
@@ -294,7 +294,7 @@ async function getMonthlySpend(
   const { ids, viewKey } = selectAccounts(accountsParam, tracked);
   const { opts, cachePrefix } = await getSpendOpts(api);
   // 'all' keeps the bare-month key so pre-view cache rows stay valid.
-  const cacheKey = cachePrefix + (viewKey === 'all' ? month : `${month}:${viewKey}`);
+  const cacheKey = cachePrefix + 'sp2:' + (viewKey === 'all' ? month : `${month}:${viewKey}`);
 
   if (!forceRefresh) {
     const cached = await getCachedMonth(cacheKey);
@@ -528,7 +528,7 @@ const inFlightPnl = new Map<string, Promise<MonthlyPnl>>();
 
 async function getMonthlyPnl(month: string, forceRefresh: boolean): Promise<MonthlyPnl> {
   const { opts: spendOpts, cachePrefix } = await getSpendOpts(await getComputeApi());
-  const cacheKey = `${cachePrefix}pnl2:${month}`;
+  const cacheKey = `${cachePrefix}pnl3:${month}`;
   if (!forceRefresh) {
     const cached = await getCachedMonth(cacheKey);
     if (cached) {
@@ -977,7 +977,7 @@ async function getPnlCtx(api: QboApi): Promise<PnlContext & { accountNames: Map<
  * the other range endpoints; also the data source for /api/checks. */
 async function getStatement(range: { start: string; end: string }, force: boolean): Promise<any> {
   const { opts: spendOpts, cachePrefix } = await getSpendOpts(await getComputeApi());
-  const cacheKey = `${cachePrefix}stmt4:${range.start}:${range.end}`;
+  const cacheKey = `${cachePrefix}stmt5:${range.start}:${range.end}`;
   if (!force) {
     const cached = await getCachedMonth(cacheKey);
     const closed = range.end < new Date().toISOString().slice(0, 10);
@@ -1040,16 +1040,6 @@ async function getStatement(range: { start: string; end: string }, force: boolea
       // from months earlier); for typical Jan-1 starts this still picks Dec 31.
       const beginCount = await countAsOf(range.start === range.end ? dayBefore(range.start) : range.start);
       const endCount = await countAsOf(range.end);
-      const inventoryIdsForSettled = (await getTrackedAccounts(api)).map((t) => t.id);
-      const settled = await computePurchasesSettled(
-        api, inventoryIdsForSettled, range, new Date().toISOString().slice(0, 10)
-      );
-      if (settled.openBillCount > 0) {
-        pnl.warnings.push(
-          `${settled.openBillCount} bill(s) in this range aren't fully paid yet — ` +
-          `$${settled.openBillExpected.toFixed(2)} of their cost is assumed to be paid in cash (net of credits so far) and self-corrects as payments and credits land.`
-        );
-      }
       const daysBetween = (a: string, b: string) =>
         Math.abs(new Date(`${a}T00:00:00Z`).getTime() - new Date(`${b}T00:00:00Z`).getTime()) / 86_400_000;
       let adjusted: any = null;
@@ -1067,11 +1057,11 @@ async function getStatement(range: { start: string; end: string }, force: boolea
           );
         }
         const inventoryChange = r2(endCount.value - beginCount.value);
-        // Accounting-basis purchases = what we actually PAID for each bill
-        // (cash settlement; vendor credits are the part that was never ours to
-        // pay), booked on the bill's date + direct no-bill buys. Chris's rule,
-        // 2026-07-17: "I only want to count what we paid for the bill."
-        const adjustedCogsTotal = r2(settled.total - inventoryChange + pnl.directCosts - pnl.cogsOffsets);
+        // Purchases = cash actually paid for bills, on the day it was paid
+        // (Chris, 2026-07-17: "count what we paid for the bill… the cost
+        // should go on January 2nd not the 30th"). Credits never count —
+        // bucket 1 scales every payment line by its cash fraction.
+        const adjustedCogsTotal = r2(pnl.cogs - inventoryChange + pnl.directCosts - pnl.cogsOffsets);
         const adjustedGp = r2(pnl.revenueNet - adjustedCogsTotal);
         adjusted = {
           beginAsOf: beginCount.asOf,
@@ -1103,12 +1093,6 @@ async function getStatement(range: { start: string; end: string }, force: boolea
           directCosts: pnl.directCosts,
           rebateOffsets: pnl.cogsOffsets,
           total: r2(pnl.cogs + pnl.directCosts - pnl.cogsOffsets),
-          purchasesReceived: settled.total,
-          purchasesReceivedParts: {
-            bills: settled.billedNet,
-            direct: settled.directTotal,
-            creditsNetted: settled.creditsNetted,
-          },
           bookedReference: spend.bookedTotal,
           vendorCreditsApplied: spend.vendorCreditsApplied,
         },
@@ -1203,28 +1187,6 @@ app.get(
           ? 'No remittance transactions are visible to the API for this range — the statement fell back to the tax account’s balance movement, which can’t be itemized here.'
           : undefined;
       return res.json({ line, rows: result.rows, sum: result.sum, note });
-    }
-
-    // Inventory purchases — Chris's rule: each bill at what we actually PAID
-    // for it (cash settlement, credits never count), on the bill's date, plus
-    // direct no-bill buys. Same engine call as the statement, so it sum-checks.
-    if (line === 'purchasesReceived') {
-      const accounts = (await getTrackedAccounts()).map((t) => t.id);
-      const result = await dedupe(`dt:pr2:${range.start}:${range.end}`, async () => {
-        const api = await getComputeApi();
-        const settled = await computePurchasesSettled(api, accounts, range, new Date().toISOString().slice(0, 10));
-        const rows: DetailRow[] = settled.transactions.map((t) => ({
-          date: t.date,
-          name: t.vendor,
-          txnType: t.sourceType === 'BillPayment' ? 'Bill' : t.paymentMethod === 'Check' ? 'Check' : 'Purchase',
-          txnId: t.txnId ?? null,
-          amount: t.amount,
-          detail: t.detail,
-          group: t.vendor,
-        }));
-        return { rows, sum: settled.total };
-      });
-      return res.json({ line, rows: result.rows, sum: result.sum });
     }
 
     const incomeLines = ['deposits', 'invoicePayments', 'salesReceipts', 'refunds', 'feedRefunds', 'rebates', 'reimbursements'];

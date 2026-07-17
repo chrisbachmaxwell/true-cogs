@@ -151,14 +151,35 @@ export async function computeMonthlySpend(
     const fundingAccountId =
       bp.CheckPayment?.BankAccountRef?.value || bp.CreditCardPayment?.CCAccountRef?.value;
 
+    // QBO records each bill-linked line at the bill's FULL covered amount —
+    // cash and applied credits BLENDED — with the credits as separate
+    // context lines. Counting line amounts as cash overstated spend by the
+    // credits (~$1.2–1.5M/yr; found 2026-07-17, the bug behind every
+    // "P&L runs $1M below Chris's gut" symptom). Scale every bill line by
+    // the payment's cash fraction so only money that actually left counts:
+    // Chris's rule — "I only want to count what we paid for the bill."
+    let billLinesTotal = 0;
+    let creditLinesTotal = 0;
+    for (const line of bp.Line || []) {
+      const linked: any[] = line.LinkedTxn || [];
+      if (linked.some((t) => t.TxnType === 'VendorCredit')) creditLinesTotal += Number(line.Amount) || 0;
+      else if (linked.some((t) => t.TxnType === 'Bill')) billLinesTotal += Number(line.Amount) || 0;
+    }
+    // TotalAmt is the actual cash and is authoritative when present; the
+    // line identity (bill coverage − credits = cash) is the fallback.
+    const paymentCash = bp.TotalAmt !== undefined && bp.TotalAmt !== null
+      ? Number(bp.TotalAmt) || 0
+      : Math.max(billLinesTotal - creditLinesTotal, 0);
+    const cashFraction = billLinesTotal > 0 ? Math.max(0, Math.min(paymentCash / billLinesTotal, 1)) : 1;
+
     for (const line of bp.Line || []) {
       const linkedTxns: any[] = line.LinkedTxn || [];
       const linkedBill = linkedTxns.find((t) => t.TxnType === 'Bill');
       const linkedCredit = linkedTxns.find((t) => t.TxnType === 'VendorCredit');
 
       if (linkedCredit) {
-        // Context only: this credit already reduced the cash lines, so it is not
-        // part of the cash math.
+        // Context only: the cash-fraction scaling above keeps these out of
+        // the cash math.
         vendorCreditsApplied += Number(line.Amount) || 0;
         continue;
       }
@@ -174,7 +195,7 @@ export async function computeMonthlySpend(
       if (chargeTotal <= 0 || inventoryPortionOfBill <= 0) continue;
 
       const inventoryRatio = inventoryPortionOfBill / chargeTotal;
-      const attributed = round2((Number(line.Amount) || 0) * inventoryRatio);
+      const attributed = round2((Number(line.Amount) || 0) * cashFraction * inventoryRatio);
       if (attributed === 0) continue;
 
       if (excludedIds && fundingAccountId && excludedIds.has(String(fundingAccountId))) {
@@ -198,7 +219,9 @@ export async function computeMonthlySpend(
         detail:
           `Bill #${bill?.DocNumber || linkedBill.TxnId}: $${inventoryPortionOfBill.toFixed(2)} of ` +
           `$${chargeTotal.toFixed(2)} in charges is inventory (${(inventoryRatio * 100).toFixed(1)}%); ` +
-          `payment of $${Number(line.Amount).toFixed(2)} × ratio` +
+          `covered $${Number(line.Amount).toFixed(2)}` +
+          (cashFraction < 0.9999 ? `, cash share ${(cashFraction * 100).toFixed(1)}% (rest by credits)` : '') +
+          ` × ratio` +
           (chargeTotal > billTotal ? `; bill net of $${(chargeTotal - billTotal).toFixed(2)} discount` : ''),
       });
     }

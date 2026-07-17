@@ -115,7 +115,6 @@ function expectedFor(key) {
     case 'feedRefunds': return d.income.feedRefunds;
     case 'salesTax': return d.income.salesTaxRemitted;
     case 'inventory': return d.cogs.inventoryCash;
-    case 'purchasesReceived': return d.cogs.purchasesReceived;
     case 'inventoryChange': return d.adjusted ? d.adjusted.inventoryChange : null;
     case 'directCosts': return d.cogs.directCosts;
     case 'rebates': return d.cogs.rebateOffsets;
@@ -336,12 +335,7 @@ async function load(force) {
     h += row('Less: sales tax remitted', -d.income.salesTaxRemitted, null, 'salesTax');
     h += row('Total income (net revenue)', d.income.netRevenue, 'total');
     h += '<div class="section">Cost of goods sold</div>';
-    if (d.adjusted && d.cogs.purchasesReceived !== undefined) {
-      h += row('Inventory purchases — what we paid for the bills (+ direct buys)', d.cogs.purchasesReceived, null, 'purchasesReceived');
-      h += row('Inventory cash paid in this period (bank cross-check)', d.cogs.inventoryCash, 'sub', 'inventory');
-    } else {
-      h += row('Inventory purchases (cash, both locations)', d.cogs.inventoryCash, null, 'inventory');
-    }
+    h += row('Inventory purchases (cash actually paid — credits never count)', d.cogs.inventoryCash, null, 'inventory');
     if (d.adjusted) {
       h += row('Less: inventory ' + (d.adjusted.inventoryChange >= 0 ? 'increase' : 'decrease') +
         ' (counts ' + d.adjusted.beginAsOf + ' → ' + d.adjusted.endAsOf + ')', -d.adjusted.inventoryChange, 'sub', 'inventoryChange');

@@ -65,9 +65,12 @@ test('inventoryPortionOfLines only counts matching account-based lines', () => {
   assert.equal(inventoryPortionOfLines(bill, MAT_INV), 125.5);
 });
 
-test('bucket 1: vendor-credit-at-payment scenario does not double count', async () => {
-  // $20,000 bill fully coded to inventory; $2,000 vendor credit applied at payment
-  // time so only $18,000 cash left the bank. Expect exactly 18,000.
+test('bucket 1: vendor-credit-at-payment scenario counts only the cash', async () => {
+  // $20,000 bill fully coded to inventory; $2,000 vendor credit applied at
+  // payment so only $18,000 cash left the bank. REAL QBO shape (verified
+  // 2026-07-17 against production payments): the bill-linked line carries the
+  // FULL covered amount ($20,000) and the credit is a separate context line;
+  // TotalAmt carries the actual cash. Expect exactly 18,000.
   const api = mockApi({
     bills: {
       'B1': { Id: 'B1', TotalAmt: 20000, DocNumber: '1001', Line: [expenseLine(MAT_INV, 20000)] },
@@ -76,10 +79,11 @@ test('bucket 1: vendor-credit-at-payment scenario does not double count', async 
       {
         Id: 'BP1',
         TxnDate: '2026-06-10',
+        TotalAmt: 18000,
         PayType: 'Check',
         VendorRef: { name: 'Canon' },
         Line: [
-          { Amount: 18000, LinkedTxn: [{ TxnType: 'Bill', TxnId: 'B1' }] },
+          { Amount: 20000, LinkedTxn: [{ TxnType: 'Bill', TxnId: 'B1' }] },
           { Amount: 2000, LinkedTxn: [{ TxnType: 'VendorCredit', TxnId: 'VC1' }] },
         ],
       },
@@ -413,4 +417,26 @@ test('purchases settled: credit-application lines (linked to both credit and bil
   const r = await computePurchasesSettled(api, MAT_INV, { start: '2026-06-01', end: '2026-06-30' }, '2026-07-17');
   assert.equal(r.billedNet, 70);
   assert.equal(r.creditsNetted, 30);
+});
+
+test('bucket 1 counts only the cash share: credit-covered portions are excluded', async () => {
+  // Bill $16,836.50 fully covered by one payment: $6,935.14 cash + $9,901.36
+  // credits (real shape: bill-linked line carries the FULL covered amount,
+  // credit is a separate context line). Only the cash share may count.
+  const bill = { Id: 'B30', TotalAmt: 16836.5, Line: [expenseLine(MAT_INV, 16836.5)] };
+  const api = mockApi({
+    bills: { B30: bill },
+    billPayments: [
+      {
+        Id: 'BP30', TxnDate: '2026-06-10', TotalAmt: 6935.14, PayType: 'Check',
+        Line: [
+          { Amount: 16836.5, LinkedTxn: [{ TxnType: 'Bill', TxnId: 'B30' }] },
+          { Amount: 9901.36, LinkedTxn: [{ TxnType: 'VendorCredit', TxnId: 'VC30' }] },
+        ],
+      },
+    ],
+  });
+  const r = await computeMonthlySpend(api, MAT_INV, '2026-06');
+  assert.equal(r.bucket1Total, 6935.14); // cash only — not the blended 16,836.50
+  assert.equal(r.vendorCreditsApplied, 9901.36);
 });
