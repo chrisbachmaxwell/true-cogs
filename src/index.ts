@@ -1576,10 +1576,11 @@ app.get(
 
     // 2 — the income number decomposes exactly into its parts.
     const decomposed =
-      stmt.income.deposits + stmt.income.invoicePayments + (stmt.income.salesReceipts || 0) - stmt.income.refunds;
+      stmt.income.deposits + stmt.income.invoicePayments + (stmt.income.salesReceipts || 0) - stmt.income.refunds -
+      (stmt.income.feedRefunds || 0);
     add({
       id: 'income-decomposition',
-      name: 'Income equals deposits + payments − refunds, to the cent',
+      name: 'Income equals deposits + payments − refunds (incl. bank-feed refunds), to the cent',
       status: near(decomposed, stmt.income.moneyIn) ? 'pass' : 'fail',
       expected: stmt.income.moneyIn,
       actual: Math.round(decomposed * 100) / 100,
