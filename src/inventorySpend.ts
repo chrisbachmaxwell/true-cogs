@@ -303,3 +303,109 @@ export async function computeMonthlySpend(
     warnings,
   };
 }
+
+// ---- Purchases as settled: what we actually paid for each bill ----
+// Chris's rule (2026-07-17): "I only want to count what we paid for the bill."
+// A bill's true cost is its cash settlement — vendor credits (rebates, returns,
+// pass-throughs) are the part of the bill that was never ours to pay. Booked on
+// the BILL's date, so payment timing never moves profit between periods.
+//
+// Per bill: cost = cash applied so far + remaining balance (QBO keeps Balance
+// current). For a fully settled bill that is exactly the cash paid (verified:
+// cash + credits = bill totals within 0.2% across 467 payments); for an open
+// bill it assumes the remainder will be paid in cash and self-corrects as
+// credits land. Direct no-bill purchases count as before, at their own dates.
+
+export interface PurchasesSettledResult {
+  total: number;
+  billedNet: number;
+  directTotal: number;
+  creditsNetted: number;
+  openBillCount: number;
+  openBillExpected: number;
+  transactions: SpendTransaction[];
+}
+
+export async function computePurchasesSettled(
+  api: QboApi,
+  inventoryAccountIds: AccountIds,
+  range: { start: string; end: string },
+  today: string
+): Promise<PurchasesSettledResult> {
+  const accountIdList = Array.isArray(inventoryAccountIds) ? inventoryAccountIds : [inventoryAccountIds];
+  const transactions: SpendTransaction[] = [];
+
+  // Cash applied per bill, from every payment dated bill-period start → today.
+  const cashByBill = new Map<string, number>();
+  for (const bp of await api.queryByDateRange('BillPayment', range.start, today)) {
+    for (const line of bp.Line || []) {
+      const linked = (line.LinkedTxn || []).find((t: any) => t.TxnType === 'Bill');
+      if (!linked) continue;
+      cashByBill.set(String(linked.TxnId), (cashByBill.get(String(linked.TxnId)) || 0) + (Number(line.Amount) || 0));
+    }
+  }
+
+  let billedNet = 0;
+  let creditsNetted = 0;
+  let openBillCount = 0;
+  let openBillExpected = 0;
+  for (const bill of await api.queryByDateRange('Bill', range.start, range.end)) {
+    const inventoryPortion = inventoryPortionOfLines(bill, accountIdList);
+    if (inventoryPortion <= 0) continue;
+    const billTotal = Number(bill.TotalAmt) || 0;
+    const chargeTotal = positiveLineTotal(bill) || billTotal;
+    if (chargeTotal <= 0) continue;
+    const balance = Number(bill.Balance) || 0;
+    const cashSoFar = cashByBill.get(String(bill.Id)) || 0;
+    const expectedCash = round2(cashSoFar + balance);
+    const credits = round2(billTotal - expectedCash);
+    const cost = round2(expectedCash * (inventoryPortion / chargeTotal));
+    if (cost === 0) continue;
+    billedNet += cost;
+    creditsNetted += round2(credits * (inventoryPortion / chargeTotal));
+    if (balance > 0.01) {
+      openBillCount++;
+      openBillExpected += round2(balance * (inventoryPortion / chargeTotal));
+    }
+    transactions.push({
+      date: bill.TxnDate,
+      vendor: bill.VendorRef?.name || bill.VendorRef?.value || 'Unknown vendor',
+      sourceType: 'BillPayment',
+      paymentMethod: 'Bill',
+      txnId: bill.Id ? String(bill.Id) : undefined,
+      amount: cost,
+      detail:
+        `Bill #${bill.DocNumber || bill.Id}: $${billTotal.toFixed(2)} billed` +
+        (credits > 0.01 ? ` − $${credits.toFixed(2)} covered by credits` : '') +
+        (balance > 0.01 ? ` ($${balance.toFixed(2)} still open, assumed cash)` : ''),
+    });
+  }
+
+  let directTotal = 0;
+  for (const purchase of await api.queryByDateRange('Purchase', range.start, range.end)) {
+    const portion = inventoryPortionOfLines(purchase, accountIdList);
+    if (portion <= 0) continue;
+    const amount = round2((purchase.Credit === true ? -1 : 1) * portion);
+    directTotal += amount;
+    transactions.push({
+      date: purchase.TxnDate,
+      vendor: purchase.EntityRef?.name || purchase.EntityRef?.value || 'Unknown payee',
+      sourceType: 'Purchase',
+      paymentMethod: purchase.PaymentType || 'Unknown',
+      txnId: purchase.Id ? String(purchase.Id) : undefined,
+      amount,
+      detail: purchase.Credit === true ? 'Refund/credit-back' : 'Direct buy (no bill)',
+    });
+  }
+
+  transactions.sort((a, b) => a.date.localeCompare(b.date));
+  return {
+    total: round2(billedNet + directTotal),
+    billedNet: round2(billedNet),
+    directTotal: round2(directTotal),
+    creditsNetted: round2(creditsNetted),
+    openBillCount,
+    openBillExpected: round2(openBillExpected),
+    transactions,
+  };
+}

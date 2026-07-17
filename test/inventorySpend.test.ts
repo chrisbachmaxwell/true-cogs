@@ -361,3 +361,34 @@ test('inventory received nets vendor credits and splits its components', async (
   assert.equal(r.vendorCreditBooked, 300);
   assert.equal(r.bookedTotal, 9200); // 9000 + 500 − 300
 });
+
+test('purchases settled: each bill counts at what we paid for it, on its date', async () => {
+  const api = mockApi({
+    billsInMonth: [
+      // Fully settled: $100 bill, $70 cash + $30 credits → counts $70.
+      { Id: 'B10', TxnDate: '2026-06-03', TotalAmt: 100, Balance: 0, VendorRef: { name: 'Canon' }, Line: [expenseLine(MAT_INV, 100)] },
+      // Open: $200 bill, $50 cash so far, $120 still owed → counts $170 ($30 credits already netted).
+      { Id: 'B11', TxnDate: '2026-06-10', TotalAmt: 200, Balance: 120, VendorRef: { name: 'Sony' }, Line: [expenseLine(MAT_INV, 200)] },
+      // Non-inventory bill — ignored.
+      { Id: 'B12', TxnDate: '2026-06-11', TotalAmt: 50, Balance: 0, Line: [expenseLine(OTHER, 50)] },
+    ],
+    billPayments: [
+      { Id: 'BP10', TxnDate: '2026-06-20', Line: [{ Amount: 70, LinkedTxn: [{ TxnType: 'Bill', TxnId: 'B10' }] }] },
+      // Payment next period still attributes to the June bill.
+      { Id: 'BP11', TxnDate: '2026-07-05', Line: [{ Amount: 50, LinkedTxn: [{ TxnType: 'Bill', TxnId: 'B11' }] }] },
+    ],
+    purchases: [
+      { Id: 'P10', TxnDate: '2026-06-15', PaymentType: 'Cash', Line: [expenseLine(MAT_INV, 25)] },
+    ],
+  });
+  const { computePurchasesSettled } = await import('../src/inventorySpend');
+  const r = await computePurchasesSettled(api, MAT_INV, { start: '2026-06-01', end: '2026-06-30' }, '2026-07-17');
+  assert.equal(r.billedNet, 240); // 70 + 170
+  assert.equal(r.directTotal, 25);
+  assert.equal(r.total, 265);
+  assert.equal(r.creditsNetted, 60); // 30 + 30
+  assert.equal(r.openBillCount, 1);
+  const b10 = r.transactions.find((t) => t.txnId === 'B10');
+  assert.equal(b10?.amount, 70);
+  assert.equal(b10?.date, '2026-06-03'); // bill date, not payment date
+});

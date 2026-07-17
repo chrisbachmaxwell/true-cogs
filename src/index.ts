@@ -3,7 +3,7 @@ import path from 'path';
 import { config, missingQboConfig } from './config';
 import { initDb, getConfigValue, setConfigValue, getCachedMonth, setCachedMonth, getPool } from './db';
 import { buildAuthUri, handleCallback, createQboApi, connectionStatus, QboApi } from './qbo';
-import { computeMonthlySpend, inventoryPortionOfLines, MonthlySpendResult, SpendOptions } from './inventorySpend';
+import { computeMonthlySpend, computePurchasesSettled, inventoryPortionOfLines, MonthlySpendResult, SpendOptions } from './inventorySpend';
 import { computeMonthlyPnl, MonthlyPnl, PnlContext } from './pnl';
 import { computePnlDetail, expenseAccountDetail, DetailRow } from './pnlDetail';
 import { computeCashFlow, reportBalances } from './cashflow';
@@ -977,7 +977,7 @@ async function getPnlCtx(api: QboApi): Promise<PnlContext & { accountNames: Map<
  * the other range endpoints; also the data source for /api/checks. */
 async function getStatement(range: { start: string; end: string }, force: boolean): Promise<any> {
   const { opts: spendOpts, cachePrefix } = await getSpendOpts(await getComputeApi());
-  const cacheKey = `${cachePrefix}stmt3:${range.start}:${range.end}`;
+  const cacheKey = `${cachePrefix}stmt4:${range.start}:${range.end}`;
   if (!force) {
     const cached = await getCachedMonth(cacheKey);
     const closed = range.end < new Date().toISOString().slice(0, 10);
@@ -1040,6 +1040,16 @@ async function getStatement(range: { start: string; end: string }, force: boolea
       // from months earlier); for typical Jan-1 starts this still picks Dec 31.
       const beginCount = await countAsOf(range.start === range.end ? dayBefore(range.start) : range.start);
       const endCount = await countAsOf(range.end);
+      const inventoryIdsForSettled = (await getTrackedAccounts(api)).map((t) => t.id);
+      const settled = await computePurchasesSettled(
+        api, inventoryIdsForSettled, range, new Date().toISOString().slice(0, 10)
+      );
+      if (settled.openBillCount > 0) {
+        pnl.warnings.push(
+          `${settled.openBillCount} bill(s) in this range aren't fully paid yet — ` +
+          `$${settled.openBillExpected.toFixed(2)} of their cost is assumed to be paid in cash (net of credits so far) and self-corrects as payments and credits land.`
+        );
+      }
       const daysBetween = (a: string, b: string) =>
         Math.abs(new Date(`${a}T00:00:00Z`).getTime() - new Date(`${b}T00:00:00Z`).getTime()) / 86_400_000;
       let adjusted: any = null;
@@ -1057,11 +1067,11 @@ async function getStatement(range: { start: string; end: string }, force: boolea
           );
         }
         const inventoryChange = r2(endCount.value - beginCount.value);
-        // Accounting-basis purchases = inventory RECEIVED (bills + direct buys,
-        // net of vendor credits), not cash paid — paying January's bill in
-        // February must not move profit between periods (Chris, 2026-07-17:
-        // "switch"). Cash paid stays on the statement as the bank cross-check.
-        const adjustedCogsTotal = r2(spend.bookedTotal - inventoryChange + pnl.directCosts - pnl.cogsOffsets);
+        // Accounting-basis purchases = what we actually PAID for each bill
+        // (cash settlement; vendor credits are the part that was never ours to
+        // pay), booked on the bill's date + direct no-bill buys. Chris's rule,
+        // 2026-07-17: "I only want to count what we paid for the bill."
+        const adjustedCogsTotal = r2(settled.total - inventoryChange + pnl.directCosts - pnl.cogsOffsets);
         const adjustedGp = r2(pnl.revenueNet - adjustedCogsTotal);
         adjusted = {
           beginAsOf: beginCount.asOf,
@@ -1093,11 +1103,11 @@ async function getStatement(range: { start: string; end: string }, force: boolea
           directCosts: pnl.directCosts,
           rebateOffsets: pnl.cogsOffsets,
           total: r2(pnl.cogs + pnl.directCosts - pnl.cogsOffsets),
-          purchasesReceived: spend.bookedTotal,
+          purchasesReceived: settled.total,
           purchasesReceivedParts: {
-            bills: spend.billedTotal,
-            direct: spend.directBoughtTotal,
-            vendorCredits: spend.vendorCreditBooked,
+            bills: settled.billedNet,
+            direct: settled.directTotal,
+            creditsNetted: settled.creditsNetted,
           },
           bookedReference: spend.bookedTotal,
           vendorCreditsApplied: spend.vendorCreditsApplied,
@@ -1195,33 +1205,24 @@ app.get(
       return res.json({ line, rows: result.rows, sum: result.sum, note });
     }
 
-    // Inventory received — the accounting-basis purchases line: bills + direct
-    // buys − vendor credits, itemized with the same line math as the statement.
+    // Inventory purchases — Chris's rule: each bill at what we actually PAID
+    // for it (cash settlement, credits never count), on the bill's date, plus
+    // direct no-bill buys. Same engine call as the statement, so it sum-checks.
     if (line === 'purchasesReceived') {
       const accounts = (await getTrackedAccounts()).map((t) => t.id);
-      const result = await dedupe(`dt:pr:${range.start}:${range.end}`, async () => {
+      const result = await dedupe(`dt:pr2:${range.start}:${range.end}`, async () => {
         const api = await getComputeApi();
-        const rows: DetailRow[] = [];
-        const vendorName = (t: any) =>
-          t.VendorRef?.name || t.EntityRef?.name || t.VendorRef?.value || t.EntityRef?.value || 'Unknown payee';
-        for (const b of await api.queryByDateRange('Bill', range.start, range.end)) {
-          const amt = Math.round(inventoryPortionOfLines(b, accounts) * 100) / 100;
-          if (amt === 0) continue;
-          rows.push({ date: b.TxnDate, name: vendorName(b), txnType: 'Bill', txnId: b.Id ? String(b.Id) : null, amount: amt, detail: b.DocNumber ? `Bill #${b.DocNumber}` : undefined, group: vendorName(b) });
-        }
-        for (const p of await api.queryByDateRange('Purchase', range.start, range.end)) {
-          const portion = inventoryPortionOfLines(p, accounts);
-          if (portion <= 0) continue;
-          const amt = Math.round((p.Credit === true ? -portion : portion) * 100) / 100;
-          rows.push({ date: p.TxnDate, name: vendorName(p), txnType: p.PaymentType === 'Check' ? 'Check' : 'Purchase', txnId: p.Id ? String(p.Id) : null, amount: amt, detail: 'Direct buy (no bill)', group: vendorName(p) });
-        }
-        for (const vc of await api.queryByDateRange('VendorCredit', range.start, range.end)) {
-          const amt = Math.round(inventoryPortionOfLines(vc, accounts) * 100) / 100;
-          if (amt === 0) continue;
-          rows.push({ date: vc.TxnDate, name: vendorName(vc), txnType: 'VendorCredit', txnId: vc.Id ? String(vc.Id) : null, amount: -amt, detail: 'Vendor credit (return)', group: vendorName(vc) });
-        }
-        rows.sort((a, b) => a.date.localeCompare(b.date));
-        return { rows, sum: Math.round(rows.reduce((s, r) => s + r.amount, 0) * 100) / 100 };
+        const settled = await computePurchasesSettled(api, accounts, range, new Date().toISOString().slice(0, 10));
+        const rows: DetailRow[] = settled.transactions.map((t) => ({
+          date: t.date,
+          name: t.vendor,
+          txnType: t.sourceType === 'BillPayment' ? 'Bill' : t.paymentMethod === 'Check' ? 'Check' : 'Purchase',
+          txnId: t.txnId ?? null,
+          amount: t.amount,
+          detail: t.detail,
+          group: t.vendor,
+        }));
+        return { rows, sum: settled.total };
       });
       return res.json({ line, rows: result.rows, sum: result.sum });
     }

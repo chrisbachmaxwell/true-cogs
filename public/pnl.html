@@ -337,8 +337,8 @@ async function load(force) {
     h += row('Total income (net revenue)', d.income.netRevenue, 'total');
     h += '<div class="section">Cost of goods sold</div>';
     if (d.adjusted && d.cogs.purchasesReceived !== undefined) {
-      h += row('Inventory received (vendor bills + direct buys, net of credits)', d.cogs.purchasesReceived, null, 'purchasesReceived');
-      h += row('Inventory cash paid (bank cross-check — not in the profit math)', d.cogs.inventoryCash, 'sub', 'inventory');
+      h += row('Inventory purchases — what we paid for the bills (+ direct buys)', d.cogs.purchasesReceived, null, 'purchasesReceived');
+      h += row('Inventory cash paid in this period (bank cross-check)', d.cogs.inventoryCash, 'sub', 'inventory');
     } else {
       h += row('Inventory purchases (cash, both locations)', d.cogs.inventoryCash, null, 'inventory');
     }
