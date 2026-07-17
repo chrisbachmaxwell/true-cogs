@@ -711,6 +711,77 @@ const dayBefore = (isoDate: string) => {
   return d.toISOString().slice(0, 10);
 };
 
+/** Register reconstruction for diagnosing a broken account: replays every
+ * mirrored transaction touching the account (funded-by AND coded-to sides)
+ * month by month, so the divergence point and mechanism become visible.
+ * Read-only diagnostic. */
+app.get(
+  '/api/register-history',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const accountId = String(req.query.account || '');
+    if (!accountId) return res.status(400).json({ error: 'Provide ?account=<accountId>' });
+    const start = String(req.query.start || '2020-01-01');
+    const end = String(req.query.end || new Date().toISOString().slice(0, 10));
+    const api = await getComputeApi();
+    const months = new Map<string, any>();
+    const bucket = (date: string) => {
+      const m = (date || '').slice(0, 7);
+      if (!months.has(m)) months.set(m, { month: m, fundedOut: 0, codedIn: 0, codedOut: 0, jeNet: 0, count: 0 });
+      return months.get(m);
+    };
+    const id = String(accountId);
+    for (const p of await api.queryByDateRange('Purchase', start, end)) {
+      const sign = p.Credit === true ? -1 : 1;
+      if (String(p.AccountRef?.value) === id) {
+        // The account PAID for this (card charge / bank withdrawal).
+        const b = bucket(p.TxnDate); b.fundedOut += sign * (Number(p.TotalAmt) || 0); b.count++;
+      }
+      for (const line of p.Line || []) {
+        if (line.DetailType === 'AccountBasedExpenseLineDetail' && String(line.AccountBasedExpenseLineDetail?.AccountRef?.value) === id) {
+          // Money sent TO this account (card paydown) or coded against it.
+          const b = bucket(p.TxnDate); b.codedIn += sign * (Number(line.Amount) || 0); b.count++;
+        }
+      }
+    }
+    for (const bp of await api.queryByDateRange('BillPayment', start, end)) {
+      if (String(bp.CreditCardPayment?.CCAccountRef?.value) === id) {
+        const b = bucket(bp.TxnDate); b.fundedOut += Number(bp.TotalAmt) || 0; b.count++;
+      }
+    }
+    for (const je of await api.queryByDateRange('JournalEntry', start, end)) {
+      for (const l of je.Line || []) {
+        const d = l.JournalEntryLineDetail;
+        if (!d || String(d.AccountRef?.value) !== id) continue;
+        const b = bucket(je.TxnDate);
+        b.jeNet += (d.PostingType === 'Credit' ? 1 : -1) * (Number(l.Amount) || 0);
+        b.count++;
+      }
+    }
+    for (const dep of await api.queryByDateRange('Deposit', start, end)) {
+      for (const line of dep.Line || []) {
+        if (String(line.DepositLineDetail?.AccountRef?.value) === id) {
+          const b = bucket(dep.TxnDate); b.codedOut += Number(line.Amount) || 0; b.count++;
+        }
+      }
+    }
+    const rows = [...months.values()].sort((a, b) => a.month.localeCompare(b.month));
+    let cumulative = 0;
+    for (const r of rows) {
+      // Liability view: charges (fundedOut) and JE credits raise what's owed;
+      // paydowns (codedIn) and deposit-coded lines reduce it.
+      r.net = Math.round((r.fundedOut - r.codedIn - r.codedOut + r.jeNet) * 100) / 100;
+      cumulative = Math.round((cumulative + r.net) * 100) / 100;
+      r.cumulative = cumulative;
+      r.fundedOut = Math.round(r.fundedOut * 100) / 100;
+      r.codedIn = Math.round(r.codedIn * 100) / 100;
+      r.codedOut = Math.round(r.codedOut * 100) / 100;
+      r.jeNet = Math.round(r.jeNet * 100) / 100;
+    }
+    res.json({ account: accountId, start, end, months: rows, finalCumulative: cumulative });
+  })
+);
+
 /** Transactions behind one line of the bank report — same predicates as the
  * report itself, so every drawer sums to its line. */
 app.get(
