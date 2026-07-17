@@ -724,6 +724,11 @@ app.get(
     const start = String(req.query.start || '2020-01-01');
     const end = String(req.query.end || new Date().toISOString().slice(0, 10));
     const api = await getComputeApi();
+    const listMode = req.query.list === '1';
+    const txns: any[] = [];
+    const listRow = (side: string, type: string, t: any, amount: number) => {
+      if (listMode) txns.push({ side, type, id: String(t.Id), date: t.TxnDate, amount: Math.round(amount * 100) / 100, who: t.EntityRef?.name || t.AccountRef?.name || '', memo: t.PrivateNote || '' });
+    };
     const months = new Map<string, any>();
     const bucket = (date: string) => {
       const m = (date || '').slice(0, 7);
@@ -736,11 +741,13 @@ app.get(
       if (String(p.AccountRef?.value) === id) {
         // The account PAID for this (card charge / bank withdrawal).
         const b = bucket(p.TxnDate); b.fundedOut += sign * (Number(p.TotalAmt) || 0); b.count++;
+        listRow('fundedOut', 'Purchase', p, sign * (Number(p.TotalAmt) || 0));
       }
       for (const line of p.Line || []) {
         if (line.DetailType === 'AccountBasedExpenseLineDetail' && String(line.AccountBasedExpenseLineDetail?.AccountRef?.value) === id) {
           // Money sent TO this account (card paydown) or coded against it.
           const b = bucket(p.TxnDate); b.codedIn += sign * (Number(line.Amount) || 0); b.count++;
+          listRow('codedIn', 'Purchase', p, sign * (Number(line.Amount) || 0));
         }
       }
     }
@@ -789,7 +796,7 @@ app.get(
       r.codedOut = Math.round(r.codedOut * 100) / 100;
       r.jeNet = Math.round(r.jeNet * 100) / 100;
     }
-    res.json({ account: accountId, start, end, months: rows, finalCumulative: cumulative });
+    res.json({ account: accountId, start, end, months: rows, finalCumulative: cumulative, ...(listMode ? { txns } : {}) });
   })
 );
 
@@ -891,6 +898,20 @@ app.get(
         unmatchedPurchaseTotal: sum(purchases.filter((p) => !p.matched)),
       },
     });
+  })
+);
+
+/** Raw mirrored view of a single Purchase, for audit drill-downs where the
+ * aggregate reports aren't enough to see a transaction's line structure. */
+app.get(
+  '/api/txn-raw',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const id = String(req.query.id || '');
+    if (!id) return res.status(400).json({ error: 'Provide ?id=<purchaseId>' });
+    const api = await getComputeApi();
+    if (!api.getPurchase) return res.status(501).json({ error: 'Purchase lookup unavailable' });
+    res.json(await api.getPurchase(id));
   })
 );
 
