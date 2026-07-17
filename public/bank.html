@@ -5,6 +5,26 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bank Reconciliation · Pictureline</title>
 <link rel="stylesheet" href="/theme.css">
+<style>
+  .srow.click { cursor: pointer; border-radius: 8px; }
+  .srow.click:hover { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+  .srow.click > span:first-child::after { content: ' ›'; color: var(--ink-3); }
+  .srow.open { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  .card.drawer-mode { background: var(--surface-2); box-shadow: none; border: 1px solid var(--hairline);
+    margin: 8px 0 12px; padding: 14px 16px; }
+  .card.drawer-mode table { font-size: 12.5px; }
+  .dscroll { max-height: 440px; overflow: auto; }
+  .dhead { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .dhead h2 { margin-right: auto; }
+  .dcheck { margin-top: 12px; padding: 10px 12px; border-radius: 10px; font-size: 13px; }
+  .dcheck.ok { background: color-mix(in srgb, #34c759 12%, transparent); color: var(--ink); }
+  .dcheck.bad { background: color-mix(in srgb, var(--bad) 12%, transparent); color: var(--ink); }
+  .dnote { margin-top: 10px; color: var(--ink-2); font-size: 13px; }
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  td,th{padding:7px 10px;border-bottom:1px solid var(--hairline);text-align:left}
+  .num{text-align:right;font-variant-numeric:tabular-nums}
+  .neg{color:var(--bad)}
+</style>
 </head>
 <body>
 <div class="topbar"><div class="topbar-inner">
@@ -16,13 +36,31 @@
 
 <div class="wrap">
   <h1 class="title">Bank Reconciliation</h1>
-  <p class="subtitle">Money in − money out, measured transaction-by-transaction · <span id="rangeLabel"></span></p>
+  <p class="subtitle">Money in − money out, measured transaction-by-transaction · click any line for its transactions · <span id="rangeLabel"></span></p>
   <div id="rangeBox"></div>
   <div class="banner" id="banner"></div>
 
   <div class="card" style="margin-top:22px">
     <div class="stmt" id="stmt"><div class="empty">Computing… a fresh range takes a few minutes; cached ranges are instant.</div></div>
   </div>
+
+  <!-- Inline drawer: relocated under whatever line was clicked; parked here when closed. -->
+  <div id="detailPark" style="display:none">
+    <div class="card drawer-mode" id="detailCard">
+      <div class="dhead">
+        <h2 id="dTitle"></h2>
+        <button class="btn" id="dCsv">Download CSV</button>
+        <button class="btn" id="dClose">Close ▲</button>
+      </div>
+      <div class="dscroll"><table>
+        <thead><tr><th>Date</th><th>Who / what</th><th>Type</th><th class="num">Amount</th></tr></thead>
+        <tbody id="dRows"></tbody>
+      </table></div>
+      <div class="dcheck" id="dCheck" style="display:none"></div>
+      <div class="dnote" id="dNote"></div>
+    </div>
+  </div>
+
   <div class="card">
     <h2>Top payees</h2>
     <div style="overflow-x:auto"><table>
@@ -34,27 +72,108 @@
 
 <script src="/app.js"></script>
 <script>
-function row(label, value, cls) {
-  return '<div class="srow' + (cls ? ' ' + cls : '') + '"><span>' + label + '</span><span class="num' + (value < 0 ? ' neg' : '') + '">' + usd2.format(value) + '</span></div>';
+const QBO_PATH = { BillPayment: 'billpayment', Purchase: 'expense', Deposit: 'deposit',
+  Payment: 'recvpayment', SalesReceipt: 'salesreceipt', RefundReceipt: 'refundreceipt', Transfer: 'transfer' };
+function qboLink(type, id) {
+  const p = QBO_PATH[type];
+  return p && id ? 'https://qbo.intuit.com/app/' + p + '?txnId=' + encodeURIComponent(id) : null;
 }
+
+function row(label, value, cls, key) {
+  const click = key ? ' click' : '';
+  const data = key ? ' data-key="' + key + '" data-label="' + label.replace(/"/g, '&quot;') + '" data-expected="' + Math.abs(value) + '"' : '';
+  return '<div class="srow' + (cls ? ' ' + cls : '') + click + '"' + data + '><span>' + label +
+    '</span><span class="num' + (value < 0 ? ' neg' : '') + '">' + usd2.format(value) + '</span></div>';
+}
+
+// ---- inline drawer plumbing (house pattern) ----
+let drawerAnchor = null, detailSeq = 0, dRowsData = [];
+
+function parkDrawer() {
+  $('detailPark').appendChild($('detailCard'));
+  if (drawerAnchor) drawerAnchor.classList.remove('open');
+  drawerAnchor = null;
+  detailSeq++;
+}
+
+function attachDrawer(el) {
+  if (drawerAnchor === el) { parkDrawer(); return false; }
+  parkDrawer();
+  el.after($('detailCard'));
+  el.classList.add('open');
+  drawerAnchor = el;
+  return true;
+}
+
+async function openLine(el) {
+  if (!attachDrawer(el)) return;
+  const my = ++detailSeq;
+  const key = el.dataset.key, label = el.dataset.label, expected = Number(el.dataset.expected);
+  $('dTitle').textContent = label;
+  $('dRows').innerHTML = '<tr><td colspan="4" class="empty">Loading…</td></tr>';
+  $('dCheck').style.display = 'none';
+  $('dNote').textContent = '';
+  try {
+    const d = await jfetch('/api/bank-flow-detail?' + Range.qs() + '&line=' + encodeURIComponent(key));
+    if (my !== detailSeq) return;
+    dRowsData = d.rows || [];
+    if (!dRowsData.length) {
+      $('dRows').innerHTML = '<tr><td colspan="4" class="empty">No transactions on this line for the range.</td></tr>';
+      return;
+    }
+    let h = '';
+    for (const r of dRowsData) {
+      const link = qboLink(r.txnType, r.txnId);
+      h += '<tr><td>' + r.date + '</td><td>' + escapeHtml(r.name) + (r.detail ? ' <span class="hint">' + escapeHtml(r.detail) + '</span>' : '') + '</td><td>' +
+        (link ? '<a href="' + link + '" target="_blank">' + r.txnType + '</a>' : r.txnType) + '</td>' +
+        '<td class="num' + (r.amount < 0 ? ' neg' : '') + '">' + usd2.format(r.amount) + '</td></tr>';
+    }
+    $('dRows').innerHTML = h;
+    const ok = Math.abs(Math.abs(d.sum) - expected) <= 0.01;
+    const check = $('dCheck');
+    check.style.display = '';
+    check.className = 'dcheck ' + (ok ? 'ok' : 'bad');
+    check.textContent = ok
+      ? '✓ These ' + dRowsData.length + ' transactions sum to ' + usd2.format(d.sum) + ' — matches the report line.'
+      : '✗ Transactions sum to ' + usd2.format(d.sum) + ' but the line shows ' + usd2.format(expected) + ' — the report may be stale; press Refresh.';
+  } catch (err) {
+    if (my !== detailSeq) return;
+    $('dRows').innerHTML = '<tr><td colspan="4" class="empty">Couldn’t load: ' + escapeHtml(err.message) + '</td></tr>';
+  }
+}
+
+function downloadCsv() {
+  if (!dRowsData.length) return;
+  const esc = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+  const lines = ['Date,Name,Type,Amount'];
+  for (const r of dRowsData) lines.push([r.date, r.name, r.txnType, r.amount].map(esc).join(','));
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = ($('dTitle').textContent || 'bank-line').replace(/[^\w]+/g, '-').toLowerCase() + '.csv';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
 async function load(force) {
+  parkDrawer(); // the statement re-renders — never let it eat the drawer
   const fresh = staleGuard();
   setLoading(true);
   try {
     const d = await jfetch('/api/bank-flow?' + Range.qs() + (force ? '&refresh=1' : ''));
     if (!fresh()) return;
     let h = '<div class="section">Money in</div>';
-    h += row('Deposits into bank', d.inflows.deposits);
-    h += row('Receipts/payments straight to bank', d.inflows.directSalesReceipts + d.inflows.directInvoicePayments);
-    if (d.inflows.transfersIn) h += row('Transfers in', d.inflows.transfersIn);
+    h += row('Deposits into bank', d.inflows.deposits, null, 'deposits');
+    h += row('Receipts/payments straight to bank', d.inflows.directSalesReceipts + d.inflows.directInvoicePayments, null, 'direct');
+    if (d.inflows.transfersIn) h += row('Transfers in', d.inflows.transfersIn, null, 'transfersIn');
     h += row('Total in', d.inflows.total, 'total');
     h += '<div class="section">Money out</div>';
-    h += row('Bill payments (checks/ACH)', -d.outflows.billPayments);
+    h += row('Bill payments (checks/ACH)', -d.outflows.billPayments, null, 'billPayments');
     h += row('· of which inventory', -d.outflows.billPaymentsInventoryPortion, 'sub');
-    h += row('Direct purchases from bank', -d.outflows.purchases);
+    h += row('Direct purchases from bank', -d.outflows.purchases, null, 'purchases');
     h += row('· of which inventory', -d.outflows.purchasesInventoryPortion, 'sub');
-    if (d.outflows.refundsToCustomers) h += row('Customer refunds', -d.outflows.refundsToCustomers);
-    if (d.outflows.transfersToCards + d.outflows.transfersOutOther) h += row('Card pay-downs & transfers out', -(d.outflows.transfersToCards + d.outflows.transfersOutOther));
+    if (d.outflows.refundsToCustomers) h += row('Customer refunds', -d.outflows.refundsToCustomers, null, 'refunds');
+    if (d.outflows.transfersToCards + d.outflows.transfersOutOther) h += row('Card pay-downs & transfers out', -(d.outflows.transfersToCards + d.outflows.transfersOutOther), null, 'transfersOut');
     h += row('Total out (categorized)', -d.outflows.total, 'total');
     h += row('Net of categorized transactions', d.netCategorized, 'total');
     if (d.actualBankChange !== null) {
@@ -76,8 +195,15 @@ async function load(force) {
   }
   $('backLink').href = linkWithRange('/');
 }
+
 async function init() {
   mountRange((force) => load(force));
+  $('dClose').addEventListener('click', parkDrawer);
+  $('dCsv').addEventListener('click', downloadCsv);
+  $('stmt').addEventListener('click', (e) => {
+    const el = e.target.closest('.srow.click');
+    if (el) openLine(el);
+  });
   if (await checkStatus()) load(false);
 }
 init();

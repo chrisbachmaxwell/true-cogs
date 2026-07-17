@@ -10,7 +10,7 @@ import { computeCashFlow, reportBalances } from './cashflow';
 import { runSync, syncIfStale, syncStatus, isStoreFresh, makeLocalApi, upsertTxns } from './sync';
 import { planReclassify, planRevert } from './reclassify';
 import fs from 'fs';
-import { computeBankFlow } from './bankflow';
+import { bankFlowDetail, computeBankFlow } from './bankflow';
 import { monthDateRange } from './inventorySpend';
 import {
   authEnabled,
@@ -704,6 +704,26 @@ const dayBefore = (isoDate: string) => {
   d.setUTCDate(d.getUTCDate() - 1);
   return d.toISOString().slice(0, 10);
 };
+
+/** Transactions behind one line of the bank report — same predicates as the
+ * report itself, so every drawer sums to its line. */
+app.get(
+  '/api/bank-flow-detail',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const range = validRange(req, res);
+    if (!range) return;
+    const line = String(req.query.line || '');
+    const startDate = monthDateRange(range.start).start;
+    const endDate = monthDateRange(range.end).end;
+    const result = await dedupe(`dt:bf:${line}:${startDate}:${endDate}`, async () => {
+      const api = await getComputeApi();
+      const banks = await getBankAccounts(api);
+      return bankFlowDetail(api, banks.map((b) => b.id), line, startDate, endDate);
+    });
+    res.json({ line, ...result });
+  })
+);
 
 /** Balance-sheet diff over the range: bank change + where the cash went. */
 app.get(
