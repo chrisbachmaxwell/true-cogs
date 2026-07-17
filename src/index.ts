@@ -1843,8 +1843,14 @@ app.get(
         if (m.type === 'Equity' && /dist|dividend|draw/i.test(n)) { put(cat('owners', 'Money to the owners', 'Distributions, dividends, and personal tax prepayments (1040-ES).', true), m, use); continue; }
         if (/jens/i.test(n)) { put(cat('owners', 'Money to the owners', '', true), m, use); continue; }
         if (m.type === 'Fixed Asset') { put(cat('capex', 'Built into the business', 'Store build-out, furniture, equipment — cash that became property.', true), m, use); continue; }
-        if (m.type === 'Credit Card' || m.type === 'Accounts Payable' || /w\/h|withhold|direct deposit|payroll.*payable/i.test(n)) {
-          put(cat('financing', 'Cards, vendors & payroll dues', 'Negative means they lent you more this period (money you got to use without earning it yet); positive means you paid old dues down.', true), m, use);
+        if (m.type === 'Accounts Payable') {
+          // Mirror image of A/R: unpaid vendor bills are neither cost (cost
+          // lands when PAID, Chris's rule) nor a destination of profit.
+          put(cat('owedByYou', 'Unpaid vendor bills (not cost yet)', 'Bills received but not yet paid. Under your rule these become cost on the day you pay them — until then they are neither profit nor its destination, just goods waiting on the payment.', false), m, m.change);
+          continue;
+        }
+        if (m.type === 'Credit Card' || /w\/h|withhold|direct deposit|payroll.*payable/i.test(n)) {
+          put(cat('financing', 'Cards & payroll dues', 'Negative means they lent you more this period (money you got to use without earning it yet); positive means you paid old dues down.', true), m, use);
           continue;
         }
         put(cat('other', 'Everything else on the balance sheet', 'Small accounts that moved; positive parks profit, negative frees it.', true), m, use);
@@ -1862,7 +1868,7 @@ app.get(
         });
       }
 
-      const order = ['banks', 'inventory', 'owners', 'capex', 'financing', 'other', 'owed', 'broken'];
+      const order = ['banks', 'inventory', 'owners', 'capex', 'financing', 'other', 'owed', 'owedByYou', 'broken'];
       const categories = order.filter((k) => cats[k]).map((k) => cats[k]);
       for (const c of categories) c.accounts.sort((a, b) => Math.abs(b.amount || b.change) - Math.abs(a.amount || a.change));
       const accounted = Math.round(categories.filter((c) => c.inProof).reduce((s, c) => s + c.total, 0) * 100) / 100;
