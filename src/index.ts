@@ -919,10 +919,29 @@ app.get(
 
       const inPool = (ref: any) => ref?.value && poolIds.has(String(ref.value));
 
+      // Operating expenses paid by CREDIT CARD land on the P&L but never touch
+      // the bank pool — the card pays, then the card gets paid down later (which
+      // shows in the non-cost "credit-card paydown" bucket). Measure them so the
+      // P&L expense total reconciles.
+      const cardTypeIds = new Set(accounts.filter((a: any) => String(a.AccountType) === 'Credit Card').map((a: any) => String(a.Id)));
+      const isExpenseAcct = (acctId: any) => {
+        const t = typeById.get(String(acctId)) || '';
+        return t === 'Expense' || t === 'Other Expense';
+      };
+      let cardPaidExpenses = 0;
+      const allPurchases = await api.queryByDateRange('Purchase', range.start, range.end);
+
       // Direct purchases funded from the pool: split by each line's coded account.
-      for (const p of await api.queryByDateRange('Purchase', range.start, range.end)) {
-        if (!inPool(p.AccountRef)) continue;
+      for (const p of allPurchases) {
         const sign = p.Credit === true ? -1 : 1;
+        if (cardTypeIds.has(String(p.AccountRef?.value))) {
+          for (const line of p.Line || []) {
+            if (line.DetailType === 'AccountBasedExpenseLineDetail' && isExpenseAcct(line.AccountBasedExpenseLineDetail?.AccountRef?.value))
+              cardPaidExpenses += sign * (Number(line.Amount) || 0);
+          }
+          continue;
+        }
+        if (!inPool(p.AccountRef)) continue;
         let lined = 0;
         for (const line of p.Line || []) {
           const amt = sign * (Number(line.Amount) || 0);
@@ -937,6 +956,7 @@ app.get(
         const rest = sign * (Number(p.TotalAmt) || 0) - sign * lined;
         if (Math.abs(rest) > 0.02) add('unclassified', rest, { date: p.TxnDate, who: p.EntityRef?.name, amount: rest, id: p.Id, type: 'Purchase(unlined)' });
       }
+      cardPaidExpenses = Math.round(cardPaidExpenses * 100) / 100;
 
       // Bill payments funded from the pool: distribute the cash paid across the
       // paid bill's line accounts (that's what the money was really for).
@@ -1015,8 +1035,13 @@ app.get(
       const r2 = (n: number) => Math.round(n * 100) / 100;
       const cashInventory = buckets.get('cogs')?.total || 0;
       const cashExpenses = buckets.get('expenses')?.total || 0;
-      // Money that IS on the P&L but leaves the bank invisibly (payroll
-      // paychecks + Sales-Tax-Center payments have no QuickBooks transactions).
+      // Decompose the P&L operating-expense total by HOW it was paid, so the
+      // gap between visible bank cash and P&L expenses is fully explained.
+      const payrollRe = /payroll|wage|salar|casual labor|officer|fica|futa|suta|unemploy|medicare|social security/i;
+      const payrollOnPnl = r2((stmt.expenses?.rows || []).filter((row: any) => payrollRe.test(row.name)).reduce((s: number, row: any) => s + row.amount, 0));
+      const expenseByBank = r2(cashExpenses);
+      const expenseByCard = cardPaidExpenses;
+      const expenseRemainder = r2((plExpenses || 0) - expenseByBank - expenseByCard - payrollOnPnl);
       const expenseInvisible = r2((plExpenses || 0) - cashExpenses);
 
       return {
@@ -1039,6 +1064,14 @@ app.get(
           cashExpensesOut: r2(cashExpenses),
           pnlOperatingExpenses: plExpenses,
           expenseInvisible,
+          // Full decomposition of P&L operating expenses by how they were paid.
+          expenseBreakdown: {
+            paidFromBank: expenseByBank,
+            paidByCreditCard: expenseByCard,
+            payrollAndTaxes: payrollOnPnl,
+            remainder: expenseRemainder,
+            remainderNote: 'Remainder = expenses booked on unpaid bills (accrued, no cash yet), Sales-Tax-Center items, and accrual-vs-cash timing. Small remainder = fully reconciled.',
+          },
           notes: [
             'Cash inventory out ≈ P&L COGS; the difference is inventory timing (cash buys stock now, it becomes COGS only when sold).',
             `Cash operating-expense out ($${r2(cashExpenses).toLocaleString()}) is far below P&L operating expenses ($${(plExpenses || 0).toLocaleString()}) because ~$${expenseInvisible.toLocaleString()} of expense — mostly PAYROLL — leaves the bank with NO QuickBooks transaction (paychecks + tax-center are processed outside QBO). That money still appears as an expense on the accrual P&L, so it is fully counted and does NOT overstate profit.`,
