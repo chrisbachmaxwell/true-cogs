@@ -885,7 +885,7 @@ app.get(
       const payrollAcctIds = new Set(
         accounts.filter((a: any) => (String(a.AccountType) === 'Expense' || String(a.AccountType) === 'Other Expense') && payrollRe.test(String(a.Name))).map((a: any) => String(a.Id))
       );
-      let bankExpNonPayroll = 0, cardExpNonPayroll = 0;
+      let bankExpNonPayroll = 0, cardExpNonPayroll = 0, priorPeriodExpenseCash = 0;
       // Our real cash pool: Zions checking + the two savings, plus the ACH
       // clearing account (money in transit that is still ours).
       const REAL_BANK = /zions|xions/i;
@@ -1019,7 +1019,12 @@ app.get(
             if (bl.DetailType === 'AccountBasedExpenseLineDetail') {
               const acct = bl.AccountBasedExpenseLineDetail?.AccountRef?.value;
               add(acct, portion, { date: bp.TxnDate, who: bp.VendorRef?.name, amount: portion, id: bp.Id, type: 'BillPayment' });
-              if (isExpenseAcct(acct) && !payrollAcctIds.has(String(acct))) bankExpNonPayroll += portion;
+              if (isExpenseAcct(acct) && !payrollAcctIds.has(String(acct))) {
+                bankExpNonPayroll += portion;
+                // Cash paid THIS period toward a bill whose expense was booked in
+                // a PRIOR period — the timing that makes the leftover negative.
+                if ((bill.TxnDate || '') < range.start) priorPeriodExpenseCash += portion;
+              }
             } else add([...inventoryIds][0] || 'cogs', portion, { date: bp.TxnDate, who: bp.VendorRef?.name, amount: portion, id: bp.Id, type: 'BillPayment(item)' });
             attributed += portion;
           }
@@ -1093,8 +1098,9 @@ app.get(
             nonPayrollByBank,
             nonPayrollByCard,
             nonPayrollUnpaidOrTiming,
+            priorPeriodBillCash: r2(priorPeriodExpenseCash),
             reimbursements: r2(reimbursements),
-            note: 'GROSS operating expenses = payroll & taxes (paid via the payroll service + bank tax deposits) + all other expenses. The "other" expenses are split into what the bank paid, what the credit cards paid, and what is still on unpaid bills or is period timing. These add up exactly — nothing is missing, and the direction (payments cover the P&L) means expenses are not understated.',
+            note: 'GROSS operating expenses = payroll & taxes (paid via the payroll service + bank tax deposits) + all other expenses. The "other" expenses are split into what the bank paid, what the credit cards paid, and what is still on unpaid bills or is period timing. These add up exactly. A NEGATIVE timing line means bank+card paid MORE than this year\'s booked expense — because $' + r2(priorPeriodExpenseCash).toLocaleString() + ' of that cash paid off bills whose expense was booked in a PRIOR year. That is the opposite of a missing expense: a missing expense would show cash coded to a NON-expense account (caught in the other outflow buckets, all of which are named and reconciled), or unrecorded cash (would show as unclassified — which is $0).',
           },
           notes: [
             'Cash inventory out ≈ P&L COGS; the difference is inventory timing (cash buys stock now, it becomes COGS only when sold).',
