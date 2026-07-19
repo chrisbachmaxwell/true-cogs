@@ -830,7 +830,12 @@ async function registerMovement(api: QboApi, accountId: string, start: string, e
   }
   for (const dep of await api.queryByDateRange('Deposit', start, end)) {
     for (const line of dep.Line || []) {
-      if (String(line.DepositLineDetail?.AccountRef?.value) === id) net -= Number(line.Amount) || 0;
+      // A deposit whose source line is coded to a credit card is money coming
+      // BACK from the card issuer — a returned/refunded payment or chargeback —
+      // which RAISES what's owed (it reverses a paydown). E.g. the July 2026
+      // Amex autopay that bounced and Amex redeposited $76,640.30. (These are
+      // liability accounts, so a credit to them increases the balance.)
+      if (String(line.DepositLineDetail?.AccountRef?.value) === id) net += Number(line.Amount) || 0;
     }
   }
   return Math.round(net * 100) / 100;
@@ -2288,14 +2293,12 @@ app.get(
       // their book balances are unusable, but the PERIOD MOVEMENT is verified
       // accurate from 2025 on (2026-07-17 repair session) — measure it from
       // the mirrored transactions so card money stops vanishing from the proof.
-      const openPeriod = range.end >= new Date().toISOString().slice(0, 10);
       if (range.start >= '2025-01-01') {
         const MEASURED_CARDS = [
           {
             id: '63', name: 'Amex Platinum — payments minus charges this period',
             detail:
-              'No running balance shown: this card’s books are broken (missing years of charges), so we can’t trust a start/end number — we only trust the movement, rebuilt from the actual transactions. Negative = you paid the card down more than you charged.' +
-              (openPeriod ? ' Note: the current year still includes the July autopay that bounced and was booked twice — that’s on your fix-it list and currently overstates the paydown by ~$76,640 until the bookkeeper removes one copy.' : ''),
+              'No running balance shown: this card’s books are broken (missing years of charges), so we can’t trust a start/end number — we only trust the movement, rebuilt from the actual transactions. Negative = you paid the card down more than you charged. Returned payments (like the July autopay Amex bounced and sent back) are counted correctly, so they don’t inflate this.',
           },
           {
             id: '99', name: 'Card payment clearing (timing between the two feeds)',
