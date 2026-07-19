@@ -957,12 +957,25 @@ app.get(
         if (!inPool(fund)) continue;
         const cash = Number(bp.TotalAmt) || 0;
         if (cash === 0) continue;
+        // QBO writes each bill line at the bill's FULL covered amount (cash +
+        // applied vendor credits blended). Only TotalAmt is real cash — scale
+        // every attribution by the cash fraction so credits don't leak in as
+        // phantom outflow (the D33 fix, applied here too).
+        let coverage = 0;
+        for (const line of bp.Line || []) {
+          const linked: any[] = line.LinkedTxn || [];
+          if (linked.some((t) => t.TxnType === 'VendorCredit')) continue;
+          if (linked.some((t) => t.TxnType === 'Bill')) coverage += Number(line.Amount) || 0;
+        }
+        const cashFraction = coverage > 0 ? Math.max(0, Math.min(cash / coverage, 1)) : 1;
         let attributed = 0;
         for (const line of bp.Line || []) {
-          const linked = (line.LinkedTxn || []).find((t: any) => t.TxnType === 'Bill');
-          if (!linked) continue;
-          const bill = billById.get(String(linked.TxnId));
-          const lineCash = Number(line.Amount) || 0;
+          const linked: any[] = line.LinkedTxn || [];
+          if (linked.some((t) => t.TxnType === 'VendorCredit')) continue;
+          const linkedBill = linked.find((t) => t.TxnType === 'Bill');
+          if (!linkedBill) continue;
+          const bill = billById.get(String(linkedBill.TxnId));
+          const lineCash = (Number(line.Amount) || 0) * cashFraction;
           if (!bill) { add('unclassified', lineCash, { date: bp.TxnDate, who: bp.VendorRef?.name, amount: lineCash, id: bp.Id, type: 'BillPayment(bill missing)' }); attributed += lineCash; continue; }
           const charges = positiveLineTotal(bill) || (Number(bill.TotalAmt) || 0);
           if (charges <= 0) continue;
