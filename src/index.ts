@@ -2216,18 +2216,27 @@ app.get(
       // their book balances are unusable, but the PERIOD MOVEMENT is verified
       // accurate from 2025 on (2026-07-17 repair session) — measure it from
       // the mirrored transactions so card money stops vanishing from the proof.
+      const openPeriod = range.end >= new Date().toISOString().slice(0, 10);
       if (range.start >= '2025-01-01') {
         const MEASURED_CARDS = [
-          { id: '63', name: 'PLATINUM Amex (measured from transactions)' },
-          { id: '99', name: 'Credit Cards wash account (measured)' },
+          {
+            id: '63', name: 'Amex Platinum — payments minus charges this period',
+            detail:
+              'No running balance shown: this card’s books are broken (missing years of charges), so we can’t trust a start/end number — we only trust the movement, rebuilt from the actual transactions. Negative = you paid the card down more than you charged.' +
+              (openPeriod ? ' Note: the current year still includes the July autopay that bounced and was booked twice — that’s on your fix-it list and currently overstates the paydown by ~$76,640 until the bookkeeper removes one copy.' : ''),
+          },
+          {
+            id: '99', name: 'Card payment clearing (timing between the two feeds)',
+            detail:
+              'The account payments pass through on their way to the cards. It nets near zero over a full clean period; a leftover here is just payments whose matching charge lands in a different month.',
+          },
         ];
         for (const spec of MEASURED_CARDS) {
           const net = await registerMovement(api, spec.id, range.start, range.end);
           if (Math.abs(net) > 0.005) {
             const m = {
               id: spec.id, name: spec.name, acctNum: null, type: 'Credit Card',
-              before: null, after: null, change: net,
-              detail: 'Book balance is broken for this account, so this period’s movement is rebuilt from the actual transactions (verified accurate for 2025 onward). Positive change = the card lent you more; negative = you paid old card debt down.',
+              before: null, after: null, change: net, detail: spec.detail,
             };
             put(cat('financing', 'Cards & payroll dues', 'Negative means they lent you more this period (money you got to use without earning it yet); positive means you paid old dues down.', true), m, -net);
           }

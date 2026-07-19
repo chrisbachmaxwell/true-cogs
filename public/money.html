@@ -233,9 +233,13 @@ async function load(force) {
       for (const a of c.accounts) {
         const amt = c.inProof ? a.amount : a.change;
         const clickable = a.id !== null && a.type !== 'Counts';
+        // A null balance means "no reliable book balance for this account"
+        // (the repaired-but-still-broken card registers) — show a dash, never
+        // a misleading $0.00.
+        const bal = (v) => (v === null || v === undefined ? '<span class="hint">—</span>' : usd.format(v));
         h += '<tr' + (clickable ? ' class="acct-click" data-id="' + a.id + '" data-name="' + escapeHtml(a.name) + '"' : '') + '>' +
           '<td>' + escapeHtml(a.name) + (a.detail ? ' <span class="hint">' + escapeHtml(a.detail) + '</span>' : '') + '</td>' +
-          '<td class="num">' + usd.format(a.before) + '</td><td class="num">' + usd.format(a.after) + '</td>' +
+          '<td class="num">' + bal(a.before) + '</td><td class="num">' + bal(a.after) + '</td>' +
           '<td class="num' + (amt < 0 ? ' neg' : '') + '">' + usd.format(amt) + '</td></tr>';
       }
       h += '</tbody></table></div></div>';
