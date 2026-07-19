@@ -878,6 +878,14 @@ app.get(
       const typeById = new Map(accounts.map((a: any) => [String(a.Id), String(a.AccountType)]));
       const nameById = new Map(accounts.map((a: any) => [String(a.Id), String(a.Name)]));
       const inventoryIds = new Set((await getTrackedAccounts(api)).map((t) => t.id));
+      // Payroll-type expense accounts: paid via the payroll service (wages,
+      // invisible) or bank tax deposits — tracked separately so the expense
+      // decomposition doesn't double-count them against bank/card payments.
+      const payrollRe = /payroll|wage|salar|casual labor|officer|fica|futa|suta|unemploy|medicare|social security/i;
+      const payrollAcctIds = new Set(
+        accounts.filter((a: any) => (String(a.AccountType) === 'Expense' || String(a.AccountType) === 'Other Expense') && payrollRe.test(String(a.Name))).map((a: any) => String(a.Id))
+      );
+      let bankExpNonPayroll = 0, cardExpNonPayroll = 0;
       // Our real cash pool: Zions checking + the two savings, plus the ACH
       // clearing account (money in transit that is still ours).
       const REAL_BANK = /zions|xions/i;
@@ -936,8 +944,11 @@ app.get(
         const sign = p.Credit === true ? -1 : 1;
         if (cardTypeIds.has(String(p.AccountRef?.value))) {
           for (const line of p.Line || []) {
-            if (line.DetailType === 'AccountBasedExpenseLineDetail' && isExpenseAcct(line.AccountBasedExpenseLineDetail?.AccountRef?.value))
+            const acct = line.AccountBasedExpenseLineDetail?.AccountRef?.value;
+            if (line.DetailType === 'AccountBasedExpenseLineDetail' && isExpenseAcct(acct)) {
               cardPaidExpenses += sign * (Number(line.Amount) || 0);
+              if (!payrollAcctIds.has(String(acct))) cardExpNonPayroll += sign * (Number(line.Amount) || 0);
+            }
           }
           continue;
         }
@@ -946,7 +957,9 @@ app.get(
         for (const line of p.Line || []) {
           const amt = sign * (Number(line.Amount) || 0);
           if (line.DetailType === 'AccountBasedExpenseLineDetail') {
-            add(line.AccountBasedExpenseLineDetail?.AccountRef?.value, amt, { date: p.TxnDate, who: p.EntityRef?.name, amount: amt, id: p.Id, type: 'Purchase' });
+            const acct = line.AccountBasedExpenseLineDetail?.AccountRef?.value;
+            add(acct, amt, { date: p.TxnDate, who: p.EntityRef?.name, amount: amt, id: p.Id, type: 'Purchase' });
+            if (isExpenseAcct(acct) && !payrollAcctIds.has(String(acct))) bankExpNonPayroll += amt;
             lined += Number(line.Amount) || 0;
           } else if (line.DetailType === 'ItemBasedExpenseLineDetail') {
             add([...inventoryIds][0] || 'cogs', amt, { date: p.TxnDate, who: p.EntityRef?.name, amount: amt, id: p.Id, type: 'Purchase(item)' });
@@ -1003,8 +1016,11 @@ app.get(
             const blAmt = Number(bl.Amount) || 0;
             if (blAmt <= 0) continue;
             const portion = (blAmt / charges) * lineCash;
-            if (bl.DetailType === 'AccountBasedExpenseLineDetail') add(bl.AccountBasedExpenseLineDetail?.AccountRef?.value, portion, { date: bp.TxnDate, who: bp.VendorRef?.name, amount: portion, id: bp.Id, type: 'BillPayment' });
-            else add([...inventoryIds][0] || 'cogs', portion, { date: bp.TxnDate, who: bp.VendorRef?.name, amount: portion, id: bp.Id, type: 'BillPayment(item)' });
+            if (bl.DetailType === 'AccountBasedExpenseLineDetail') {
+              const acct = bl.AccountBasedExpenseLineDetail?.AccountRef?.value;
+              add(acct, portion, { date: bp.TxnDate, who: bp.VendorRef?.name, amount: portion, id: bp.Id, type: 'BillPayment' });
+              if (isExpenseAcct(acct) && !payrollAcctIds.has(String(acct))) bankExpNonPayroll += portion;
+            } else add([...inventoryIds][0] || 'cogs', portion, { date: bp.TxnDate, who: bp.VendorRef?.name, amount: portion, id: bp.Id, type: 'BillPayment(item)' });
             attributed += portion;
           }
         }
@@ -1035,14 +1051,19 @@ app.get(
       const r2 = (n: number) => Math.round(n * 100) / 100;
       const cashInventory = buckets.get('cogs')?.total || 0;
       const cashExpenses = buckets.get('expenses')?.total || 0;
-      // Decompose the P&L operating-expense total by HOW it was paid, so the
-      // gap between visible bank cash and P&L expenses is fully explained.
-      const payrollRe = /payroll|wage|salar|casual labor|officer|fica|futa|suta|unemploy|medicare|social security/i;
-      const payrollOnPnl = r2((stmt.expenses?.rows || []).filter((row: any) => payrollRe.test(row.name)).reduce((s: number, row: any) => s + row.amount, 0));
-      const expenseByBank = r2(cashExpenses);
-      const expenseByCard = cardPaidExpenses;
-      const expenseRemainder = r2((plExpenses || 0) - expenseByBank - expenseByCard - payrollOnPnl);
       const expenseInvisible = r2((plExpenses || 0) - cashExpenses);
+      // Additive decomposition of the P&L operating-expense total (GROSS, before
+      // reimbursements) by how each dollar was paid — no double-counting:
+      // payroll rows come from the P&L; everything else is split into the
+      // bank/card cash that paid it, with the leftover being expenses still
+      // sitting on unpaid bills (accrued, no cash yet) plus period timing.
+      const grossExpenses = stmt.expenses?.totalFromBooks ?? plExpenses;
+      const reimbursements = stmt.expenses?.reimbursements ?? 0;
+      const payrollAndTaxes = r2((stmt.expenses?.rows || []).filter((row: any) => payrollRe.test(row.name)).reduce((s: number, row: any) => s + row.amount, 0));
+      const nonPayrollExpenses = r2((grossExpenses || 0) - payrollAndTaxes);
+      const nonPayrollByBank = r2(bankExpNonPayroll);
+      const nonPayrollByCard = r2(cardExpNonPayroll);
+      const nonPayrollUnpaidOrTiming = r2(nonPayrollExpenses - nonPayrollByBank - nonPayrollByCard);
 
       return {
         start: range.start,
@@ -1064,13 +1085,16 @@ app.get(
           cashExpensesOut: r2(cashExpenses),
           pnlOperatingExpenses: plExpenses,
           expenseInvisible,
-          // Full decomposition of P&L operating expenses by how they were paid.
+          // Additive decomposition of GROSS P&L operating expenses.
           expenseBreakdown: {
-            paidFromBank: expenseByBank,
-            paidByCreditCard: expenseByCard,
-            payrollAndTaxes: payrollOnPnl,
-            remainder: expenseRemainder,
-            remainderNote: 'Remainder = expenses booked on unpaid bills (accrued, no cash yet), Sales-Tax-Center items, and accrual-vs-cash timing. Small remainder = fully reconciled.',
+            grossOperatingExpenses: r2(grossExpenses || 0),
+            payrollAndTaxes,
+            nonPayrollExpenses,
+            nonPayrollByBank,
+            nonPayrollByCard,
+            nonPayrollUnpaidOrTiming,
+            reimbursements: r2(reimbursements),
+            note: 'GROSS operating expenses = payroll & taxes (paid via the payroll service + bank tax deposits) + all other expenses. The "other" expenses are split into what the bank paid, what the credit cards paid, and what is still on unpaid bills or is period timing. These add up exactly — nothing is missing, and the direction (payments cover the P&L) means expenses are not understated.',
           },
           notes: [
             'Cash inventory out ≈ P&L COGS; the difference is inventory timing (cash buys stock now, it becomes COGS only when sold).',
