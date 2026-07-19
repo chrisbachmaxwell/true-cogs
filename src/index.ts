@@ -950,30 +950,36 @@ app.get(
     // Every open invoice (a positive balance is money still owed on it).
     const invoices = await api.queryRaw('Invoice', 'Invoice', [{ field: 'Balance', operator: '>', value: '0' }]);
     const vendors = api.listVendors ? await api.listVendors() : [];
-    const vendorNames = new Set(vendors.map((v: any) => String(v.DisplayName || v.CompanyName || '').trim().toLowerCase()).filter(Boolean));
-
     const norm = (s: string) => String(s || '').trim().toLowerCase();
-    const BOISE = /boise/i;
-    // Common camera brands/distributors that show up as "customers" only when
-    // they're really credit-memo trackers, not buyers.
-    const VENDORISH = /\b(canon|sony|nikon|fuji|fujifilm|sigma|tamron|panasonic|olympus|om digital|manfrotto|profoto|dji|gopro|synnex|ingram|sandisk|tenba|wacom|blackmagic|zeiss|leica|godox|rode|sennheiser|tripod|lowepro|peak design)\b/i;
+    // Strip corporate suffixes/punctuation so "ASI Corp." matches vendor "ASI".
+    const bare = (s: string) => norm(s).replace(/[.,]/g, '').replace(/\b(inc|corp|corporation|co|llc|ltd|usa|inc|north america|na)\b/g, '').replace(/\s+/g, ' ').trim();
+    const vendorBare = new Set(vendors.map((v: any) => bare(v.DisplayName || v.CompanyName || '')).filter(Boolean));
 
-    type Row = { customer: string; balance: number; count: number; docs: { id: string; num: string; date: string; balance: number; total: number }[] };
+    const BOISE = /boise/i;
+    const VENDORISH = /\b(canon|sony|nikon|fuji|fujifilm|sigma|tamron|panasonic|olympus|om digital|manfrotto|profoto|dji|gopro|synnex|ingram|sandisk|tenba|wacom|blackmagic|zeiss|leica|godox|rode|sennheiser|lowepro|peak design|promaster|westcott|macgroup|slik|aputure|amgreat|asi)\b/i;
+
+    type Row = { customer: string; balance: number; count: number; alsoVendor: boolean; samples: string[]; docs: { id: string; num: string; date: string; balance: number; total: number }[] };
     const byCustomer = new Map<string, Row>();
     for (const inv of invoices) {
       const name = inv.CustomerRef?.name || inv.CustomerRef?.value || 'Unknown';
       const key = norm(name);
       let row = byCustomer.get(key);
-      if (!row) { row = { customer: name, balance: 0, count: 0, docs: [] }; byCustomer.set(key, row); }
+      if (!row) { row = { customer: name, balance: 0, count: 0, alsoVendor: vendorBare.has(bare(name)), samples: [], docs: [] }; byCustomer.set(key, row); }
       const bal = Number(inv.Balance) || 0;
       row.balance = Math.round((row.balance + bal) * 100) / 100;
       row.count++;
+      // Capture a few line descriptions / item names so we can SEE what the
+      // invoice is for (a rebate/co-op memo vs a real product sale).
+      for (const l of inv.Line || []) {
+        const desc = l.Description || l.SalesItemLineDetail?.ItemRef?.name || '';
+        if (desc && row.samples.length < 4 && !row.samples.includes(desc)) row.samples.push(String(desc).slice(0, 80));
+      }
       row.docs.push({ id: String(inv.Id), num: inv.DocNumber || '', date: inv.TxnDate || '', balance: bal, total: Number(inv.TotalAmt) || 0 });
     }
 
-    const classify = (name: string): 'boise' | 'vendor' | 'customer' => {
-      if (BOISE.test(name)) return 'boise';
-      if (vendorNames.has(norm(name)) || VENDORISH.test(name)) return 'vendor';
+    const classify = (row: Row): 'boise' | 'vendor' | 'customer' => {
+      if (BOISE.test(row.customer)) return 'boise';
+      if (row.alsoVendor || VENDORISH.test(row.customer)) return 'vendor';
       return 'customer';
     };
     const groups: Record<string, { total: number; customers: Row[] }> = {
@@ -982,7 +988,7 @@ app.get(
       customer: { total: 0, customers: [] },
     };
     for (const row of byCustomer.values()) {
-      const g = groups[classify(row.customer)];
+      const g = groups[classify(row)];
       g.customers.push(row);
       g.total = Math.round((g.total + row.balance) * 100) / 100;
     }
