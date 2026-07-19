@@ -886,6 +886,13 @@ app.get(
         accounts.filter((a: any) => (String(a.AccountType) === 'Expense' || String(a.AccountType) === 'Other Expense') && payrollRe.test(String(a.Name))).map((a: any) => String(a.Id))
       );
       let bankExpNonPayroll = 0, cardExpNonPayroll = 0, priorPeriodExpenseCash = 0;
+      // Per-account expense payments (non-payroll), to compare against the P&L
+      // row for that account and locate exactly where cash paid ≠ booked expense.
+      const expensePayByAcct = new Map<string, number>();
+      const trackExpensePay = (acctId: any, amt: number) => {
+        const id = String(acctId);
+        expensePayByAcct.set(id, (expensePayByAcct.get(id) || 0) + amt);
+      };
       // Our real cash pool: Zions checking + the two savings, plus the ACH
       // clearing account (money in transit that is still ours).
       const REAL_BANK = /zions|xions/i;
@@ -947,7 +954,7 @@ app.get(
             const acct = line.AccountBasedExpenseLineDetail?.AccountRef?.value;
             if (line.DetailType === 'AccountBasedExpenseLineDetail' && isExpenseAcct(acct)) {
               cardPaidExpenses += sign * (Number(line.Amount) || 0);
-              if (!payrollAcctIds.has(String(acct))) cardExpNonPayroll += sign * (Number(line.Amount) || 0);
+              if (!payrollAcctIds.has(String(acct))) { cardExpNonPayroll += sign * (Number(line.Amount) || 0); trackExpensePay(acct, sign * (Number(line.Amount) || 0)); }
             }
           }
           continue;
@@ -959,7 +966,7 @@ app.get(
           if (line.DetailType === 'AccountBasedExpenseLineDetail') {
             const acct = line.AccountBasedExpenseLineDetail?.AccountRef?.value;
             add(acct, amt, { date: p.TxnDate, who: p.EntityRef?.name, amount: amt, id: p.Id, type: 'Purchase' });
-            if (isExpenseAcct(acct) && !payrollAcctIds.has(String(acct))) bankExpNonPayroll += amt;
+            if (isExpenseAcct(acct) && !payrollAcctIds.has(String(acct))) { bankExpNonPayroll += amt; trackExpensePay(acct, amt); }
             lined += Number(line.Amount) || 0;
           } else if (line.DetailType === 'ItemBasedExpenseLineDetail') {
             add([...inventoryIds][0] || 'cogs', amt, { date: p.TxnDate, who: p.EntityRef?.name, amount: amt, id: p.Id, type: 'Purchase(item)' });
@@ -1021,6 +1028,7 @@ app.get(
               add(acct, portion, { date: bp.TxnDate, who: bp.VendorRef?.name, amount: portion, id: bp.Id, type: 'BillPayment' });
               if (isExpenseAcct(acct) && !payrollAcctIds.has(String(acct))) {
                 bankExpNonPayroll += portion;
+                trackExpensePay(acct, portion);
                 // Cash paid THIS period toward a bill whose expense was booked in
                 // a PRIOR period — the timing that makes the leftover negative.
                 if ((bill.TxnDate || '') < range.start) priorPeriodExpenseCash += portion;
@@ -1069,6 +1077,20 @@ app.get(
       const nonPayrollByBank = r2(bankExpNonPayroll);
       const nonPayrollByCard = r2(cardExpNonPayroll);
       const nonPayrollUnpaidOrTiming = r2(nonPayrollExpenses - nonPayrollByBank - nonPayrollByCard);
+      // Where cash-paid ≠ booked expense, account by account. Positive diff =
+      // booked more than paid (unpaid/accrued — normal). Negative = paid more
+      // than booked (this is what makes the leftover negative — find the source).
+      const pnlRowById = new Map<string, number>();
+      for (const row of stmt.expenses?.rows || []) if (row.id && !payrollRe.test(row.name)) pnlRowById.set(String(row.id), (pnlRowById.get(String(row.id)) || 0) + row.amount);
+      const acctDivergence: any[] = [];
+      const allExpAcctIds = new Set([...expensePayByAcct.keys(), ...pnlRowById.keys()]);
+      for (const id of allExpAcctIds) {
+        const booked = r2(pnlRowById.get(id) || 0);
+        const paid = r2(expensePayByAcct.get(id) || 0);
+        const diff = r2(booked - paid);
+        if (Math.abs(diff) > 500) acctDivergence.push({ account: nameById.get(id) || id, booked, paidByBankOrCard: paid, diff });
+      }
+      acctDivergence.sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
 
       return {
         start: range.start,
@@ -1100,6 +1122,7 @@ app.get(
             nonPayrollUnpaidOrTiming,
             priorPeriodBillCash: r2(priorPeriodExpenseCash),
             reimbursements: r2(reimbursements),
+            accountDivergence: acctDivergence.slice(0, 15),
             note: 'GROSS operating expenses = payroll & taxes (paid via the payroll service + bank tax deposits) + all other expenses. The "other" expenses are split into what the bank paid, what the credit cards paid, and what is still on unpaid bills or is period timing. These add up exactly. A NEGATIVE timing line means bank+card paid MORE than this year\'s booked expense — because $' + r2(priorPeriodExpenseCash).toLocaleString() + ' of that cash paid off bills whose expense was booked in a PRIOR year. That is the opposite of a missing expense: a missing expense would show cash coded to a NON-expense account (caught in the other outflow buckets, all of which are named and reconciled), or unrecorded cash (would show as unclassified — which is $0).',
           },
           notes: [
