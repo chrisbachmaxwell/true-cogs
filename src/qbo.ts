@@ -18,6 +18,11 @@ export interface QboApi {
    * round-trip per bill, which is what makes cold P&L computes fast. */
   getBills?(ids: string[]): Promise<any[]>;
   getInvoice(id: string): Promise<any>;
+  /** Raw QBO SQL query for entities the typed finders don't cover (read-only
+   * diagnostics). criteria = [{field, operator, value}]. */
+  queryRaw?(table: string, respKey: string, criteria: any[]): Promise<any[]>;
+  /** All vendors (for cross-referencing customer names in the A/R audit). */
+  listVendors?(): Promise<any[]>;
   /** Fetch a Purchase with its current SyncToken (write flows need it fresh). */
   getPurchase?(id: string): Promise<any>;
   /** THE ONLY WRITE in this app: full-object Purchase update, used solely by
@@ -344,6 +349,12 @@ export async function createQboApi(): Promise<QboApi> {
     },
     async listItems() {
       return listAll('findItems', 'Item');
+    },
+    queryRaw(table: string, respKey: string, criteria: any[]) {
+      return queryAllRaw(table, respKey, criteria);
+    },
+    async listVendors() {
+      return listAll('findVendors', 'Vendor');
     },
     balanceSheet(asOfDate: string) {
       return withThrottleAndRetry(

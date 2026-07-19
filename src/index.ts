@@ -937,6 +937,72 @@ app.get(
   })
 );
 
+/** Accounts-Receivable audit: what actually makes up the A/R balance, split
+ * into real customer receivables, the Boise intercompany line, and "customers"
+ * that are really vendors (Canon etc.) the accountant invoices to track credit
+ * memos owed to us. Read-only. */
+app.get(
+  '/api/ar-audit',
+  requireAuth,
+  asyncRoute(async (_req, res) => {
+    const api = await createQboApi();
+    if (!api.queryRaw) return res.status(501).json({ error: 'raw query unavailable' });
+    // Every open invoice (a positive balance is money still owed on it).
+    const invoices = await api.queryRaw('Invoice', 'Invoice', [{ field: 'Balance', operator: '>', value: '0' }]);
+    const vendors = api.listVendors ? await api.listVendors() : [];
+    const vendorNames = new Set(vendors.map((v: any) => String(v.DisplayName || v.CompanyName || '').trim().toLowerCase()).filter(Boolean));
+
+    const norm = (s: string) => String(s || '').trim().toLowerCase();
+    const BOISE = /boise/i;
+    // Common camera brands/distributors that show up as "customers" only when
+    // they're really credit-memo trackers, not buyers.
+    const VENDORISH = /\b(canon|sony|nikon|fuji|fujifilm|sigma|tamron|panasonic|olympus|om digital|manfrotto|profoto|dji|gopro|synnex|ingram|sandisk|tenba|wacom|blackmagic|zeiss|leica|godox|rode|sennheiser|tripod|lowepro|peak design)\b/i;
+
+    type Row = { customer: string; balance: number; count: number; docs: { id: string; num: string; date: string; balance: number; total: number }[] };
+    const byCustomer = new Map<string, Row>();
+    for (const inv of invoices) {
+      const name = inv.CustomerRef?.name || inv.CustomerRef?.value || 'Unknown';
+      const key = norm(name);
+      let row = byCustomer.get(key);
+      if (!row) { row = { customer: name, balance: 0, count: 0, docs: [] }; byCustomer.set(key, row); }
+      const bal = Number(inv.Balance) || 0;
+      row.balance = Math.round((row.balance + bal) * 100) / 100;
+      row.count++;
+      row.docs.push({ id: String(inv.Id), num: inv.DocNumber || '', date: inv.TxnDate || '', balance: bal, total: Number(inv.TotalAmt) || 0 });
+    }
+
+    const classify = (name: string): 'boise' | 'vendor' | 'customer' => {
+      if (BOISE.test(name)) return 'boise';
+      if (vendorNames.has(norm(name)) || VENDORISH.test(name)) return 'vendor';
+      return 'customer';
+    };
+    const groups: Record<string, { total: number; customers: Row[] }> = {
+      boise: { total: 0, customers: [] },
+      vendor: { total: 0, customers: [] },
+      customer: { total: 0, customers: [] },
+    };
+    for (const row of byCustomer.values()) {
+      const g = groups[classify(row.customer)];
+      g.customers.push(row);
+      g.total = Math.round((g.total + row.balance) * 100) / 100;
+    }
+    for (const g of Object.values(groups)) g.customers.sort((a, b) => b.balance - a.balance);
+
+    const grand = Math.round(Object.values(groups).reduce((s, g) => s + g.total, 0) * 100) / 100;
+    res.json({
+      asOf: new Date().toISOString().slice(0, 10),
+      openInvoices: invoices.length,
+      arTotal: grand,
+      summary: {
+        realCustomers: groups.customer.total,
+        boiseIntercompany: groups.boise.total,
+        vendorCreditTrackers: groups.vendor.total,
+      },
+      groups,
+    });
+  })
+);
+
 /** Raw mirrored view of a single Purchase, for audit drill-downs where the
  * aggregate reports aren't enough to see a transaction's line structure. */
 app.get(
