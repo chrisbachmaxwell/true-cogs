@@ -2265,7 +2265,7 @@ app.get(
         if (/amex.*009|platinum amex/i.test(m.name) || (m.type === 'Credit Card' && m.before < -500000)) { put(cat('broken', 'Excluded — broken or artificial accounts', '', false), m, 0); continue; }
         if (/cash on hand|fraud/i.test(n)) { put(cat('broken', 'Excluded — broken or artificial accounts', '', false), m, 0); continue; }
         if (m.type === 'Accounts Receivable' || /credit memo/i.test(n)) {
-          put(cat('owed', 'Owed to you (not profit yet)', 'Money coming toward you — unpaid invoices and the Boise credit-memo pipe. The P&L only counts cash that has landed, so this is NOT part of the profit being proven; it is future cash.', false), m, m.change);
+          put(cat('owed', 'Owed to you (not profit yet)', 'Audited 2026-07-19: this is NOT customers owing you money (real customer A/R is ~$0). It is ~79% vendor rebates/co-op/instant-rebate claims owed to you by Canon, Nikon, Sony, etc. (settled later by credit memos, not cash) and ~21% the Boise intercompany line. The P&L only counts cash that has landed, and these settle by credit — so none of this is in the profit being proven.', false), m, m.change);
           continue;
         }
         if (m.type === 'Equity' && /dist|dividend|draw/i.test(n)) { put(cat('owners', 'Money to the owners', 'Distributions, dividends, and personal tax prepayments (1040-ES).', true), m, use); continue; }
