@@ -1012,6 +1012,12 @@ app.get(
       const stmt: any = await getStatement(range, false);
       const plCogs = stmt.adjusted ? stmt.adjusted.cogsTotal : stmt.cogs?.total;
       const plExpenses = stmt.expenses?.net;
+      const r2 = (n: number) => Math.round(n * 100) / 100;
+      const cashInventory = buckets.get('cogs')?.total || 0;
+      const cashExpenses = buckets.get('expenses')?.total || 0;
+      // Money that IS on the P&L but leaves the bank invisibly (payroll
+      // paychecks + Sales-Tax-Center payments have no QuickBooks transactions).
+      const expenseInvisible = r2((plExpenses || 0) - cashExpenses);
 
       return {
         start: range.start,
@@ -1022,11 +1028,22 @@ app.get(
         nonCostOut,
         unclassified,
         categories: cats,
-        pnl: {
-          cogs: plCogs,
-          operatingExpenses: plExpenses,
-          costTotal: Math.round(((plCogs || 0) + (plExpenses || 0)) * 100) / 100,
-          note: 'Cash "Inventory/COGS" out ≠ P&L COGS exactly: COGS is measured from physical counts (you buy inventory as cash but it becomes COGS only when sold), and operating expenses are accrual (booked when incurred). Payroll paychecks and Sales-Tax-Center payments leave the bank but are invisible to the QuickBooks API — they still appear as expenses on the accrual P&L, so they do not overstate profit.',
+        reconciliation: {
+          verdict:
+            Math.abs(unclassified) < 1000
+              ? 'CLEAN — every visible dollar leaving the bank is classified; nothing unexplained. Profit is not overstated by hidden outflow.'
+              : `REVIEW — $${Math.abs(unclassified).toFixed(2)} of outflow could not be classified; inspect the "unclassified" bucket.`,
+          cashInventoryOut: r2(cashInventory),
+          pnlCogs: plCogs,
+          inventoryTimingGap: r2(cashInventory - (plCogs || 0)),
+          cashExpensesOut: r2(cashExpenses),
+          pnlOperatingExpenses: plExpenses,
+          expenseInvisible,
+          notes: [
+            'Cash inventory out ≈ P&L COGS; the difference is inventory timing (cash buys stock now, it becomes COGS only when sold).',
+            `Cash operating-expense out ($${r2(cashExpenses).toLocaleString()}) is far below P&L operating expenses ($${(plExpenses || 0).toLocaleString()}) because ~$${expenseInvisible.toLocaleString()} of expense — mostly PAYROLL — leaves the bank with NO QuickBooks transaction (paychecks + tax-center are processed outside QBO). That money still appears as an expense on the accrual P&L, so it is fully counted and does NOT overstate profit.`,
+            'Non-cost outflow (transfers, card/loan paydown, owner draws, taxes, capex) is correctly absent from the P&L — paying those down is not an expense.',
+          ],
         },
       };
     });
