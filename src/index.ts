@@ -11,7 +11,7 @@ import { mirrorChangedSince, runSync, syncIfStale, syncStatus, isStoreFresh, mak
 import { planReclassify, planRevert } from './reclassify';
 import fs from 'fs';
 import { bankFlowDetail, computeBankFlow } from './bankflow';
-import { monthDateRange } from './inventorySpend';
+import { monthDateRange, positiveLineTotal } from './inventorySpend';
 import {
   authEnabled,
   bootstrapAdmin,
@@ -797,6 +797,227 @@ app.get(
       r.jeNet = Math.round(r.jeNet * 100) / 100;
     }
     res.json({ account: accountId, start, end, months: rows, finalCumulative: cumulative, ...(listMode ? { txns } : {}) });
+  })
+);
+
+/** Credit-memo audit: are credits piling up unapplied, or moving onto bills?
+ * Pulls vendor credits (money vendors owe us, applied against their bills) and
+ * customer credit memos, splits applied vs still-open, and ages the open ones
+ * so stale credits sitting unused are visible. Read-only. */
+app.get(
+  '/api/credit-memo-audit',
+  requireAuth,
+  asyncRoute(async (_req, res) => {
+    const api = await createQboApi();
+    if (!api.queryRaw) return res.status(501).json({ error: 'raw query unavailable' });
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const today = new Date().toISOString().slice(0, 10);
+    const daysSince = (d: string) => Math.round((new Date(`${today}T00:00:00Z`).getTime() - new Date(`${d}T00:00:00Z`).getTime()) / 86_400_000);
+
+    const audit = async (table: string, respKey: string, who: (t: any) => string) => {
+      const all = await api.queryRaw!(table, respKey, []);
+      const open: any[] = [];
+      let issuedTotal = 0, openTotal = 0;
+      for (const c of all) {
+        const total = Number(c.TotalAmt) || 0;
+        const bal = Number(c.Balance) || 0; // unapplied remainder
+        issuedTotal += total;
+        if (bal > 0.005) {
+          openTotal += bal;
+          open.push({ id: String(c.Id), num: c.DocNumber || '', date: c.TxnDate || '', who: who(c), total: r2(total), openBalance: r2(bal), ageDays: daysSince(c.TxnDate) });
+        }
+      }
+      open.sort((a, b) => b.ageDays - a.ageDays);
+      const bucket = (lo: number, hi: number) => {
+        const rows = open.filter((o) => o.ageDays > lo && o.ageDays <= hi);
+        return { count: rows.length, amount: r2(rows.reduce((s, o) => s + o.openBalance, 0)) };
+      };
+      return {
+        count: all.length,
+        issuedTotal: r2(issuedTotal),
+        openCount: open.length,
+        openTotal: r2(openTotal),
+        aging: {
+          '0-30d': bucket(-1, 30),
+          '31-90d': bucket(30, 90),
+          '91-180d': bucket(90, 180),
+          'over-180d': bucket(180, 1e9),
+        },
+        oldestOpen: open.slice(0, 20),
+      };
+    };
+
+    const [vendorCredits, creditMemos] = await Promise.all([
+      audit('VendorCredit', 'VendorCredit', (t) => t.VendorRef?.name || t.VendorRef?.value || ''),
+      audit('CreditMemo', 'CreditMemo', (t) => t.CustomerRef?.name || t.CustomerRef?.value || ''),
+    ]);
+    res.json({
+      asOf: today,
+      vendorCredits,
+      creditMemos,
+      note: 'A credit is "moving" when its open balance is 0 (fully applied to a bill/invoice). Credits with an open balance and a large age are sitting unused. VendorCredit = money a vendor owes us, applied against their bills (this is the rebate pipeline). CreditMemo = customer-side credits.',
+    });
+  })
+);
+
+/** Outflow audit: every dollar leaving the real bank accounts, classified by
+ * the account it's ultimately coded to, so we can prove that money going out
+ * is EITHER a real cost/expense (shows on the P&L) OR a legitimate non-expense
+ * use (owner draw, tax, capex, debt paydown, internal transfer) — and surface
+ * anything that's neither (a possible hole where profit would be overstated).
+ * Read-only. */
+app.get(
+  '/api/outflow-audit',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const range = validDateRange(req, res);
+    if (!range) return;
+    const result = await dedupe(`oa:${range.start}:${range.end}`, async () => {
+      const api = await getComputeApi();
+      const accounts = await api.listAccounts();
+      const typeById = new Map(accounts.map((a: any) => [String(a.Id), String(a.AccountType)]));
+      const nameById = new Map(accounts.map((a: any) => [String(a.Id), String(a.Name)]));
+      const inventoryIds = new Set((await getTrackedAccounts(api)).map((t) => t.id));
+      // Our real cash pool: Zions checking + the two savings, plus the ACH
+      // clearing account (money in transit that is still ours).
+      const REAL_BANK = /zions|xions/i;
+      const poolIds = new Set<string>();
+      for (const a of accounts) {
+        if (String(a.AccountType) === 'Bank' && REAL_BANK.test(String(a.Name))) poolIds.add(String(a.Id));
+      }
+      const achId = accounts.find((a: any) => a.Name === 'ACH')?.Id;
+      if (achId) poolIds.add(String(achId));
+
+      // Bucket every coded dollar by what kind of account it lands in.
+      const COST = 'cost';
+      const classify = (acctId: string): { key: string; label: string; isCost: boolean } => {
+        const id = String(acctId);
+        const type = typeById.get(id) || '';
+        const name = (nameById.get(id) || '').toLowerCase();
+        if (inventoryIds.has(id) || type === 'Cost of Goods Sold') return { key: 'cogs', label: 'Inventory / cost of goods sold', isCost: true };
+        if (type === 'Expense' || type === 'Other Expense') return { key: 'expenses', label: 'Operating expenses', isCost: true };
+        if (type === 'Income' || type === 'Other Income') return { key: 'refunds', label: 'Customer refunds (reduces income)', isCost: true };
+        if (type === 'Fixed Asset') return { key: 'capex', label: 'Capital assets (equipment, buildout)', isCost: false };
+        if (type === 'Equity') return { key: 'owners', label: 'Owner distributions / dividends', isCost: false };
+        if (/1040-es|estimated tax/.test(name)) return { key: 'ownertax', label: 'Owner estimated taxes (1040-ES)', isCost: false };
+        if (type === 'Credit Card') return { key: 'cards', label: 'Credit-card paydown', isCost: false };
+        if (type === 'Bank' && poolIds.has(id)) return { key: 'internal', label: 'Transfer between your own accounts', isCost: false };
+        if (type === 'Bank') return { key: 'holding', label: 'Transfer to holding accounts (Cash on Hand, etc.)', isCost: false };
+        if (/liability|payable/.test(type.toLowerCase())) return { key: 'liabilities', label: 'Loan / payroll-tax / liability paydown', isCost: false };
+        if (/asset|receivable/.test(type.toLowerCase())) return { key: 'assets', label: 'Other assets (prepaid, employee loans)', isCost: false };
+        return { key: 'unclassified', label: 'Unclassified — NEEDS REVIEW', isCost: false };
+      };
+      const buckets = new Map<string, { key: string; label: string; isCost: boolean; total: number; samples: any[] }>();
+      const add = (acctId: string, amount: number, sample?: any) => {
+        if (Math.abs(amount) < 0.005) return;
+        const c = classify(acctId);
+        let b = buckets.get(c.key);
+        if (!b) { b = { key: c.key, label: c.label, isCost: c.isCost, total: 0, samples: [] }; buckets.set(c.key, b); }
+        b.total = Math.round((b.total + amount) * 100) / 100;
+        if (sample && b.samples.length < 8) b.samples.push({ ...sample, coded: nameById.get(String(acctId)) });
+      };
+
+      const inPool = (ref: any) => ref?.value && poolIds.has(String(ref.value));
+
+      // Direct purchases funded from the pool: split by each line's coded account.
+      for (const p of await api.queryByDateRange('Purchase', range.start, range.end)) {
+        if (!inPool(p.AccountRef)) continue;
+        const sign = p.Credit === true ? -1 : 1;
+        let lined = 0;
+        for (const line of p.Line || []) {
+          const amt = sign * (Number(line.Amount) || 0);
+          if (line.DetailType === 'AccountBasedExpenseLineDetail') {
+            add(line.AccountBasedExpenseLineDetail?.AccountRef?.value, amt, { date: p.TxnDate, who: p.EntityRef?.name, amount: amt, id: p.Id, type: 'Purchase' });
+            lined += Number(line.Amount) || 0;
+          } else if (line.DetailType === 'ItemBasedExpenseLineDetail') {
+            add([...inventoryIds][0] || 'cogs', amt, { date: p.TxnDate, who: p.EntityRef?.name, amount: amt, id: p.Id, type: 'Purchase(item)' });
+            lined += Number(line.Amount) || 0;
+          }
+        }
+        const rest = sign * (Number(p.TotalAmt) || 0) - sign * lined;
+        if (Math.abs(rest) > 0.02) add('unclassified', rest, { date: p.TxnDate, who: p.EntityRef?.name, amount: rest, id: p.Id, type: 'Purchase(unlined)' });
+      }
+
+      // Bill payments funded from the pool: distribute the cash paid across the
+      // paid bill's line accounts (that's what the money was really for).
+      const billPayments = await api.queryByDateRange('BillPayment', range.start, range.end);
+      const billIds = new Set<string>();
+      for (const bp of billPayments) {
+        const fund = bp.CheckPayment?.BankAccountRef;
+        if (!inPool(fund)) continue;
+        for (const line of bp.Line || []) {
+          const b = (line.LinkedTxn || []).find((t: any) => t.TxnType === 'Bill');
+          if (b?.TxnId) billIds.add(String(b.TxnId));
+        }
+      }
+      const bills = api.getBills ? await api.getBills([...billIds]) : [];
+      const billById = new Map(bills.map((b: any) => [String(b.Id), b]));
+      for (const bp of billPayments) {
+        const fund = bp.CheckPayment?.BankAccountRef;
+        if (!inPool(fund)) continue;
+        const cash = Number(bp.TotalAmt) || 0;
+        if (cash === 0) continue;
+        let attributed = 0;
+        for (const line of bp.Line || []) {
+          const linked = (line.LinkedTxn || []).find((t: any) => t.TxnType === 'Bill');
+          if (!linked) continue;
+          const bill = billById.get(String(linked.TxnId));
+          const lineCash = Number(line.Amount) || 0;
+          if (!bill) { add('unclassified', lineCash, { date: bp.TxnDate, who: bp.VendorRef?.name, amount: lineCash, id: bp.Id, type: 'BillPayment(bill missing)' }); attributed += lineCash; continue; }
+          const charges = positiveLineTotal(bill) || (Number(bill.TotalAmt) || 0);
+          if (charges <= 0) continue;
+          for (const bl of bill.Line || []) {
+            const blAmt = Number(bl.Amount) || 0;
+            if (blAmt <= 0) continue;
+            const portion = (blAmt / charges) * lineCash;
+            if (bl.DetailType === 'AccountBasedExpenseLineDetail') add(bl.AccountBasedExpenseLineDetail?.AccountRef?.value, portion, { date: bp.TxnDate, who: bp.VendorRef?.name, amount: portion, id: bp.Id, type: 'BillPayment' });
+            else add([...inventoryIds][0] || 'cogs', portion, { date: bp.TxnDate, who: bp.VendorRef?.name, amount: portion, id: bp.Id, type: 'BillPayment(item)' });
+            attributed += portion;
+          }
+        }
+        const rest = cash - attributed;
+        if (Math.abs(rest) > 0.02) add('unclassified', rest, { date: bp.TxnDate, who: bp.VendorRef?.name, amount: rest, id: bp.Id, type: 'BillPayment(residual)' });
+      }
+
+      // Card paydowns funded from the pool.
+      for (const ccp of await api.queryByDateRange('CreditCardPayment', range.start, range.end)) {
+        if (inPool(ccp.BankAccountRef)) add(ccp.CreditCardAccountRef?.value || 'cards', Number(ccp.Amount) || 0, { date: ccp.TxnDate, who: ccp.CreditCardAccountRef?.name, amount: Number(ccp.Amount) || 0, id: ccp.Id, type: 'CardPayment' });
+      }
+      // Explicit transfers out of the pool.
+      for (const t of await api.queryByDateRange('Transfer', range.start, range.end)) {
+        const from = inPool(t.FromAccountRef), to = inPool(t.ToAccountRef);
+        if (from && !to) add(t.ToAccountRef?.value, Number(t.Amount) || 0, { date: t.TxnDate, who: t.ToAccountRef?.name, amount: Number(t.Amount) || 0, id: t.Id, type: 'Transfer' });
+      }
+
+      const cats = [...buckets.values()].sort((a, b) => b.total - a.total);
+      const costOut = Math.round(cats.filter((c) => c.isCost).reduce((s, c) => s + c.total, 0) * 100) / 100;
+      const nonCostOut = Math.round(cats.filter((c) => !c.isCost && c.key !== 'unclassified').reduce((s, c) => s + c.total, 0) * 100) / 100;
+      const unclassified = Math.round((buckets.get('unclassified')?.total || 0) * 100) / 100;
+      const categorizedOut = Math.round((costOut + nonCostOut + unclassified) * 100) / 100;
+
+      // The P&L side, to compare the cost portion against.
+      const stmt: any = await getStatement(range, false);
+      const plCogs = stmt.adjusted ? stmt.adjusted.cogsTotal : stmt.cogs?.total;
+      const plExpenses = stmt.expenses?.net;
+
+      return {
+        start: range.start,
+        end: range.end,
+        pool: [...poolIds].map((id) => nameById.get(id)).filter(Boolean),
+        categorizedOut,
+        costOut,
+        nonCostOut,
+        unclassified,
+        categories: cats,
+        pnl: {
+          cogs: plCogs,
+          operatingExpenses: plExpenses,
+          costTotal: Math.round(((plCogs || 0) + (plExpenses || 0)) * 100) / 100,
+          note: 'Cash "Inventory/COGS" out ≠ P&L COGS exactly: COGS is measured from physical counts (you buy inventory as cash but it becomes COGS only when sold), and operating expenses are accrual (booked when incurred). Payroll paychecks and Sales-Tax-Center payments leave the bank but are invisible to the QuickBooks API — they still appear as expenses on the accrual P&L, so they do not overstate profit.',
+        },
+      };
+    });
+    res.json(result);
   })
 );
 
