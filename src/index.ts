@@ -883,12 +883,10 @@ app.get(
         }
       }
 
-      // (3) A/P float level: running (bills entered − bill cash paid), sampled at
-      // each quarter end — the vendor "loan" balance over time.
-      const events: { date: string; amt: number }[] = [];
-      for (const b of bills) events.push({ date: b.TxnDate, amt: Number(b.TotalAmt) || 0 });
-      for (const bp of billPayments) events.push({ date: bp.TxnDate, amt: -(Number(bp.TotalAmt) || 0) });
-      events.sort((a, b) => a.date.localeCompare(b.date));
+      // (3) A/P float level: the REAL Accounts Payable balance at each quarter
+      // end (the vendor "loan"), read from the balance sheet — the derived
+      // bills-minus-payments version is distorted by vendor credits.
+      const apAcctId = String((await api.listAccounts()).find((a: any) => String(a.AccountType) === 'Accounts Payable')?.Id || '');
       const quarterEnd: Record<string, string> = {};
       for (const qtr of rows.keys()) {
         const [y, qn] = qtr.split('-Q');
@@ -896,12 +894,12 @@ app.get(
         const lastDay = new Date(Date.UTC(Number(y), endMonth, 0)).getUTCDate();
         quarterEnd[qtr] = `${y}-${String(endMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
       }
-      let running = 0; let ei = 0;
       const apAtQuarter: Record<string, number> = {};
       for (const qtr of [...rows.keys()].sort()) {
-        const qe = quarterEnd[qtr];
-        while (ei < events.length && events[ei].date <= qe) { running += events[ei].amt; ei++; }
-        apAtQuarter[qtr] = r2(running);
+        try {
+          const bal = reportBalances(await api.balanceSheet(quarterEnd[qtr]));
+          apAtQuarter[qtr] = r2(bal.get(apAcctId)?.value ?? 0);
+        } catch { apAtQuarter[qtr] = 0; }
       }
 
       const out = [...rows.values()].sort((a, b) => a.quarter.localeCompare(b.quarter)).map((r) => ({
