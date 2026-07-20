@@ -819,40 +819,47 @@ app.get(
         const m = Number((date || '').slice(5, 7));
         return `${(date || '').slice(0, 4)}-Q${Math.floor((m - 1) / 3) + 1}`;
       };
-      const discountIds = new Set(
-        (await api.listAccounts())
-          .filter((a: any) => /vendor discount/i.test(String(a.Name)))
-          .map((a: any) => String(a.Id))
-      );
-
-      type Row = { quarter: string; discountsTaken: number; paidCash: number; weightedGapDays: number; upfrontCash: number; termCash: number };
+      type Row = { quarter: string; paidCash: number; weightedGapDays: number; upfrontCash: number; termCash: number };
       const rows = new Map<string, Row>();
       const row = (quarter: string) => {
         let r = rows.get(quarter);
-        if (!r) { r = { quarter, discountsTaken: 0, paidCash: 0, weightedGapDays: 0, upfrontCash: 0, termCash: 0 }; rows.set(quarter, r); }
+        if (!r) { r = { quarter, paidCash: 0, weightedGapDays: 0, upfrontCash: 0, termCash: 0 }; rows.set(quarter, r); }
         return r;
       };
 
       const bills = await api.queryByDateRange('Bill', START, END);
       const billById = new Map(bills.map((b: any) => [String(b.Id), b]));
-      const purchases = await api.queryByDateRange('Purchase', START, END);
-      const jes = await api.queryByDateRange('JournalEntry', START, END);
       const billPayments = await api.queryByDateRange('BillPayment', START, END);
 
-      // (1) Vendor discounts captured — lines coded to the vendor-discount COGS
-      // accounts, wherever they post (bills, purchases, journal entries). These
-      // reduce COGS, so they arrive as negative amounts; report the magnitude.
-      const scanDiscounts = (txns: any[], lineAccessor: (l: any) => any) => {
-        for (const t of txns) {
-          for (const l of t.Line || []) {
-            const acct = lineAccessor(l);
-            if (acct && discountIds.has(String(acct))) row(q(t.TxnDate)).discountsTaken += Math.abs(Number(l.Amount) || 0);
+      // (1) Vendor early-pay discounts captured, from the accrual P&L per year —
+      // this is authoritative (the postings don't reliably come through the
+      // transaction feed). The accountant recorded these in "Discounts/Refunds
+      // Given" through 2025, then moved to dedicated "Vendor Discounts" accounts
+      // in 2026; both names are captured here so the timeline is continuous.
+      const discountRe = /vendor discount|discounts\/refunds given/i;
+      const sumPnlAccounts = (report: any, re: RegExp) => {
+        let sum = 0;
+        const walk = (rws: any) => {
+          for (const rr of rws?.Row || []) {
+            const col = rr.ColData;
+            if (col?.length >= 2 && col[0]?.value && re.test(col[0].value)) {
+              const amt = Number(col[col.length - 1]?.value);
+              if (!Number.isNaN(amt)) sum += Math.abs(amt);
+            }
+            if (rr.Rows) walk(rr.Rows);
           }
-        }
+        };
+        walk(report?.Rows);
+        return r2(sum);
       };
-      scanDiscounts(bills, (l) => l.AccountBasedExpenseLineDetail?.AccountRef?.value);
-      scanDiscounts(purchases, (l) => l.AccountBasedExpenseLineDetail?.AccountRef?.value);
-      scanDiscounts(jes, (l) => l.JournalEntryLineDetail?.AccountRef?.value);
+      const discountsByYear: any[] = [];
+      const thisYear = Number(END.slice(0, 4));
+      for (let y = 2022; y <= thisYear; y++) {
+        const ye = y === thisYear ? END : `${y}-12-31`;
+        try {
+          discountsByYear.push({ year: y, vendorDiscountsCaptured: sumPnlAccounts(await api.profitAndLoss(`${y}-01-01`, ye), discountRe), through: ye });
+        } catch { discountsByYear.push({ year: y, vendorDiscountsCaptured: null, through: ye }); }
+      }
 
       // (2) Payment timing: gap between bill date and payment date, weighted by
       // the cash actually applied (D33 cash fraction so credits don't distort).
@@ -904,14 +911,16 @@ app.get(
 
       const out = [...rows.values()].sort((a, b) => a.quarter.localeCompare(b.quarter)).map((r) => ({
         quarter: r.quarter,
-        discountsTaken: r2(r.discountsTaken),
         billCashPaid: r2(r.paidCash),
         avgDaysToPay: r.paidCash > 0 ? r2(r.weightedGapDays / r.paidCash) : null,
         pctPaidUpfront: r.paidCash > 0 ? r2((r.upfrontCash / r.paidCash) * 100) : null,
         pctPaidOnTerms: r.paidCash > 0 ? r2((r.termCash / r.paidCash) * 100) : null,
         apFloatLevel: apAtQuarter[r.quarter],
       }));
-      return { start: START, end: END, discountAccounts: [...discountIds], quarters: out };
+      return {
+        start: START, end: END, quarters: out, discountsByYear,
+        note: 'discountsByYear reads the accrual P&L for the vendor early-pay discount accounts (recorded in "Discounts/Refunds Given" through 2025, moved to dedicated "Vendor Discounts" accounts in 2026). Payment timing and A/P float are quarterly. A/P float = the real Accounts Payable balance (the vendor "loan").',
+      };
     });
     res.json(result);
   })
