@@ -800,6 +800,125 @@ app.get(
   })
 );
 
+/** Early-payment-discount / working-capital shift analysis. Around mid-2023
+ * Pictureline moved from paying vendors on 30-60 day terms to paying UPFRONT to
+ * capture early-pay discounts (Canon etc.). That converts vendor float (an
+ * interest-free "loan") into cash tied up in inventory. This traces, by quarter:
+ * (1) vendor discounts captured, (2) how fast bills get paid, (3) the A/P float
+ * level — so the cash impact of the shift is visible. Read-only. */
+app.get(
+  '/api/discount-shift-analysis',
+  requireAuth,
+  asyncRoute(async (_req, res) => {
+    const result = await dedupe('discount-shift', async () => {
+      const api = await getComputeApi();
+      const START = '2021-01-01';
+      const END = new Date().toISOString().slice(0, 10);
+      const r2 = (n: number) => Math.round(n * 100) / 100;
+      const q = (date: string) => {
+        const m = Number((date || '').slice(5, 7));
+        return `${(date || '').slice(0, 4)}-Q${Math.floor((m - 1) / 3) + 1}`;
+      };
+      const discountIds = new Set(
+        (await api.listAccounts())
+          .filter((a: any) => /vendor discount/i.test(String(a.Name)))
+          .map((a: any) => String(a.Id))
+      );
+
+      type Row = { quarter: string; discountsTaken: number; paidCash: number; weightedGapDays: number; upfrontCash: number; termCash: number };
+      const rows = new Map<string, Row>();
+      const row = (quarter: string) => {
+        let r = rows.get(quarter);
+        if (!r) { r = { quarter, discountsTaken: 0, paidCash: 0, weightedGapDays: 0, upfrontCash: 0, termCash: 0 }; rows.set(quarter, r); }
+        return r;
+      };
+
+      const bills = await api.queryByDateRange('Bill', START, END);
+      const billById = new Map(bills.map((b: any) => [String(b.Id), b]));
+      const purchases = await api.queryByDateRange('Purchase', START, END);
+      const jes = await api.queryByDateRange('JournalEntry', START, END);
+      const billPayments = await api.queryByDateRange('BillPayment', START, END);
+
+      // (1) Vendor discounts captured — lines coded to the vendor-discount COGS
+      // accounts, wherever they post (bills, purchases, journal entries). These
+      // reduce COGS, so they arrive as negative amounts; report the magnitude.
+      const scanDiscounts = (txns: any[], lineAccessor: (l: any) => any) => {
+        for (const t of txns) {
+          for (const l of t.Line || []) {
+            const acct = lineAccessor(l);
+            if (acct && discountIds.has(String(acct))) row(q(t.TxnDate)).discountsTaken += Math.abs(Number(l.Amount) || 0);
+          }
+        }
+      };
+      scanDiscounts(bills, (l) => l.AccountBasedExpenseLineDetail?.AccountRef?.value);
+      scanDiscounts(purchases, (l) => l.AccountBasedExpenseLineDetail?.AccountRef?.value);
+      scanDiscounts(jes, (l) => l.JournalEntryLineDetail?.AccountRef?.value);
+
+      // (2) Payment timing: gap between bill date and payment date, weighted by
+      // the cash actually applied (D33 cash fraction so credits don't distort).
+      const days = (a: string, b: string) => (new Date(`${a}T00:00:00Z`).getTime() - new Date(`${b}T00:00:00Z`).getTime()) / 86_400_000;
+      for (const bp of billPayments) {
+        const cash = Number(bp.TotalAmt) || 0;
+        if (cash <= 0) continue;
+        let coverage = 0;
+        for (const line of bp.Line || []) {
+          const linked: any[] = line.LinkedTxn || [];
+          if (linked.some((t) => t.TxnType === 'VendorCredit')) continue;
+          if (linked.some((t) => t.TxnType === 'Bill')) coverage += Number(line.Amount) || 0;
+        }
+        const cashFraction = coverage > 0 ? Math.max(0, Math.min(cash / coverage, 1)) : 1;
+        for (const line of bp.Line || []) {
+          const linked: any[] = line.LinkedTxn || [];
+          if (linked.some((t) => t.TxnType === 'VendorCredit')) continue;
+          const lb = linked.find((t) => t.TxnType === 'Bill');
+          if (!lb) continue;
+          const bill = billById.get(String(lb.TxnId));
+          if (!bill) continue;
+          const applied = (Number(line.Amount) || 0) * cashFraction;
+          const gap = Math.max(0, days(bp.TxnDate, bill.TxnDate));
+          const r = row(q(bp.TxnDate));
+          r.paidCash += applied;
+          r.weightedGapDays += applied * gap;
+          if (gap <= 7) r.upfrontCash += applied; else if (gap >= 25) r.termCash += applied;
+        }
+      }
+
+      // (3) A/P float level: running (bills entered − bill cash paid), sampled at
+      // each quarter end — the vendor "loan" balance over time.
+      const events: { date: string; amt: number }[] = [];
+      for (const b of bills) events.push({ date: b.TxnDate, amt: Number(b.TotalAmt) || 0 });
+      for (const bp of billPayments) events.push({ date: bp.TxnDate, amt: -(Number(bp.TotalAmt) || 0) });
+      events.sort((a, b) => a.date.localeCompare(b.date));
+      const quarterEnd: Record<string, string> = {};
+      for (const qtr of rows.keys()) {
+        const [y, qn] = qtr.split('-Q');
+        const endMonth = Number(qn) * 3;
+        const lastDay = new Date(Date.UTC(Number(y), endMonth, 0)).getUTCDate();
+        quarterEnd[qtr] = `${y}-${String(endMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+      }
+      let running = 0; let ei = 0;
+      const apAtQuarter: Record<string, number> = {};
+      for (const qtr of [...rows.keys()].sort()) {
+        const qe = quarterEnd[qtr];
+        while (ei < events.length && events[ei].date <= qe) { running += events[ei].amt; ei++; }
+        apAtQuarter[qtr] = r2(running);
+      }
+
+      const out = [...rows.values()].sort((a, b) => a.quarter.localeCompare(b.quarter)).map((r) => ({
+        quarter: r.quarter,
+        discountsTaken: r2(r.discountsTaken),
+        billCashPaid: r2(r.paidCash),
+        avgDaysToPay: r.paidCash > 0 ? r2(r.weightedGapDays / r.paidCash) : null,
+        pctPaidUpfront: r.paidCash > 0 ? r2((r.upfrontCash / r.paidCash) * 100) : null,
+        pctPaidOnTerms: r.paidCash > 0 ? r2((r.termCash / r.paidCash) * 100) : null,
+        apFloatLevel: apAtQuarter[r.quarter],
+      }));
+      return { start: START, end: END, discountAccounts: [...discountIds], quarters: out };
+    });
+    res.json(result);
+  })
+);
+
 /** Credit-memo audit: are credits piling up unapplied, or moving onto bills?
  * Pulls vendor credits (money vendors owe us, applied against their bills) and
  * customer credit memos, splits applied vs still-open, and ages the open ones
