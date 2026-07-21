@@ -141,7 +141,14 @@ function mountRange(onChange) {
 async function jfetch(url) {
   const res = await fetch(url);
   if (res.status === 401) { location.href = '/login'; throw new Error('signed out'); }
-  const data = await res.json();
+  // Read as text first: when the server is busy or restarting, the hosting
+  // proxy can answer with plain text ("upstream error") — surfacing a raw
+  // JSON-parse failure at the user is never OK.
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch {
+    throw new Error('The server is taking longer than usual (probably computing a big date range). Wait a minute and press Refresh.');
+  }
   if (!res.ok) throw new Error(data.error || res.statusText);
   return data;
 }

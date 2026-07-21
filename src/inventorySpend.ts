@@ -221,11 +221,10 @@ export async function computeMonthlySpend(
         continue;
       }
       bucket1Total += attributed;
-      console.log(
-        `[spend ${month}] BillPayment ${bp.Id} → Bill ${linkedBill.TxnId}: ` +
-          `paid ${line.Amount}, bill total ${billTotal}, charges ${chargeTotal}, inventory portion ${inventoryPortionOfBill}, ` +
-          `ratio ${inventoryRatio.toFixed(4)}, attributed ${attributed}`
-      );
+      // (No per-line logging here: a multi-year range has tens of thousands of
+      // lines, and synchronous stdout at that volume stalls the event loop —
+      // it froze the whole app on 2026-07-21 until requests hit the proxy
+      // timeout. The transactions array below is the audit trail.)
       transactions.push({
         date: bp.TxnDate,
         vendor,
