@@ -926,6 +926,45 @@ app.get(
   })
 );
 
+/** A/P audit: per-vendor open balances, so a negative total A/P can be traced
+ * to the specific vendors who are overpaid / carrying unapplied credits.
+ * Read-only. */
+app.get(
+  '/api/ap-audit',
+  requireAuth,
+  asyncRoute(async (_req, res) => {
+    const api = await createQboApi();
+    if (!api.listVendors || !api.queryRaw) return res.status(501).json({ error: 'vendor query unavailable' });
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const vendors = await api.listVendors();
+    const owed: any[] = [];
+    const negative: any[] = [];
+    let total = 0;
+    for (const v of vendors) {
+      const bal = Number(v.Balance) || 0;
+      if (Math.abs(bal) < 0.005) continue;
+      total += bal;
+      (bal > 0 ? owed : negative).push({ vendor: v.DisplayName || v.CompanyName, balance: r2(bal) });
+    }
+    owed.sort((a, b) => b.balance - a.balance);
+    negative.sort((a, b) => a.balance - b.balance);
+    // Open (unapplied) vendor credits, to test the "credits not yet applied" theory.
+    const credits = await api.queryRaw('VendorCredit', 'VendorCredit', []);
+    const openCredits = credits
+      .filter((c: any) => (Number(c.Balance) || 0) > 0.005)
+      .map((c: any) => ({ vendor: c.VendorRef?.name, date: c.TxnDate, open: r2(Number(c.Balance) || 0) }))
+      .sort((a: any, b: any) => b.open - a.open);
+    res.json({
+      asOf: new Date().toISOString().slice(0, 10),
+      apTotal: r2(total),
+      vendorsOwed: owed,
+      vendorsNegative: negative,
+      openVendorCredits: openCredits,
+      openVendorCreditsTotal: r2(openCredits.reduce((s: number, c: any) => s + c.open, 0)),
+    });
+  })
+);
+
 /** Credit-memo audit: are credits piling up unapplied, or moving onto bills?
  * Pulls vendor credits (money vendors owe us, applied against their bills) and
  * customer credit memos, splits applied vs still-open, and ages the open ones
