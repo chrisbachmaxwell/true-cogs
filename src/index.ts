@@ -1008,6 +1008,67 @@ app.get(
   })
 );
 
+/** Per-vendor early-pay discount rates: since SLC is the purchasing entity for
+ * both stores (Boise is supplied via the intercompany pipe), location accounts
+ * can't answer "which mix earns more discount" — but vendors can. For each
+ * vendor: inventory billed vs discounts posted, and the resulting rate. */
+app.get(
+  '/api/vendor-discount-rates',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const range = validDateRange(req, res);
+    if (!range) return;
+    const api = await getComputeApi();
+    const accounts = await api.listAccounts();
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const invIds = new Set((await getTrackedAccounts(api)).map((t) => t.id));
+    const discIds = new Set(
+      accounts
+        .filter((a: any) => /vendor discount|discounts\/refunds given/i.test(String(a.Name)))
+        .map((a: any) => String(a.Id))
+    );
+    type V = { vendor: string; billedInventory: number; discounts: number };
+    const byVendor = new Map<string, V>();
+    const row = (name: string) => {
+      const k = name || 'Unknown';
+      let v = byVendor.get(k);
+      if (!v) { v = { vendor: k, billedInventory: 0, discounts: 0 }; byVendor.set(k, v); }
+      return v;
+    };
+    const scan = (t: any, vendorName: string, creditSign: number) => {
+      for (const l of t.Line || []) {
+        if (l.DetailType !== 'AccountBasedExpenseLineDetail') continue;
+        const acct = String(l.AccountBasedExpenseLineDetail?.AccountRef?.value || '');
+        const a = (Number(l.Amount) || 0) * creditSign;
+        if (invIds.has(acct)) row(vendorName).billedInventory += a;
+        // benefit: negative bill line → +benefit; positive credit line → +benefit
+        else if (discIds.has(acct)) row(vendorName).discounts += -a;
+      }
+    };
+    for (const b of await api.queryByDateRange('Bill', range.start, range.end)) scan(b, b.VendorRef?.name, 1);
+    for (const vc of await api.queryByDateRange('VendorCredit', range.start, range.end)) scan(vc, vc.VendorRef?.name, -1);
+    for (const p of await api.queryByDateRange('Purchase', range.start, range.end)) {
+      scan(p, p.EntityRef?.name, p.Credit === true ? -1 : 1);
+    }
+    const rows = [...byVendor.values()]
+      .filter((v) => Math.abs(v.billedInventory) > 1000 || Math.abs(v.discounts) > 100)
+      .map((v) => ({
+        vendor: v.vendor,
+        billedInventory: r2(v.billedInventory),
+        discounts: r2(v.discounts),
+        ratePct: v.billedInventory > 0 ? r2((v.discounts / v.billedInventory) * 100) : null,
+      }))
+      .sort((a, b) => b.billedInventory - a.billedInventory);
+    const tInv = r2(rows.reduce((s, v) => s + v.billedInventory, 0));
+    const tDisc = r2(rows.reduce((s, v) => s + v.discounts, 0));
+    res.json({
+      start: range.start, end: range.end,
+      totals: { billedInventory: tInv, discounts: tDisc, blendedRatePct: tInv > 0 ? r2((tDisc / tInv) * 100) : null },
+      vendors: rows,
+    });
+  })
+);
+
 /** A/P audit: per-vendor open balances, so a negative total A/P can be traced
  * to the specific vendors who are overpaid / carrying unapplied credits.
  * Read-only. */
