@@ -1008,6 +1008,48 @@ app.get(
   })
 );
 
+/** Tag scan: how are bills/purchases tagged by store? Reports the distribution
+ * of QuickBooks Location (DepartmentRef) and line-level Class tags over a
+ * range, with inventory dollars per tag — read-only discovery for the
+ * per-store discount split. */
+app.get(
+  '/api/tag-scan',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const range = validDateRange(req, res);
+    if (!range) return;
+    const api = await getComputeApi();
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const invIds = new Set((await getTrackedAccounts(api)).map((t) => t.id));
+    const dist = { department: new Map<string, { txns: number; inventory: number }>(), lineClass: new Map<string, { lines: number; inventory: number }>() };
+    const bump = (m: Map<string, any>, key: string, field: string, amt = 0) => {
+      const k = key || '(untagged)';
+      let v = m.get(k);
+      if (!v) { v = { txns: 0, lines: 0, inventory: 0 }; m.set(k, v); }
+      v[field]++;
+      v.inventory += amt;
+    };
+    const scanTxns = (txns: any[], kind: string) => {
+      for (const t of txns) {
+        let invAmt = 0;
+        for (const l of t.Line || []) {
+          if (l.DetailType === 'AccountBasedExpenseLineDetail') {
+            const acct = String(l.AccountBasedExpenseLineDetail?.AccountRef?.value || '');
+            const amt = Number(l.Amount) || 0;
+            if (invIds.has(acct)) invAmt += amt;
+            bump(dist.lineClass, l.AccountBasedExpenseLineDetail?.ClassRef?.name, 'lines', invIds.has(acct) ? amt : 0);
+          }
+        }
+        bump(dist.department, t.DepartmentRef?.name, 'txns', invAmt);
+      }
+    };
+    scanTxns(await api.queryByDateRange('Bill', range.start, range.end), 'Bill');
+    const fmt = (m: Map<string, any>) =>
+      [...m.entries()].map(([tag, v]) => ({ tag, ...v, inventory: r2(v.inventory) })).sort((a, b) => b.inventory - a.inventory);
+    res.json({ start: range.start, end: range.end, billsByLocation: fmt(dist.department), billLinesByClass: fmt(dist.lineClass) });
+  })
+);
+
 /** Per-vendor early-pay discount rates: since SLC is the purchasing entity for
  * both stores (Boise is supplied via the intercompany pipe), location accounts
  * can't answer "which mix earns more discount" — but vendors can. For each
