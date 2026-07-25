@@ -926,6 +926,88 @@ app.get(
   })
 );
 
+/** Location discount tracker: inventory purchased per location (Material
+ * Inventory 11900 = SLC, Boise Inventory 11901) vs the early-pay discounts
+ * posted to each location's Vendor Discounts account, so the two stores'
+ * discount rates can be compared. Read-only. */
+app.get(
+  '/api/location-discounts',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const range = validDateRange(req, res);
+    if (!range) return;
+    const api = await getComputeApi();
+    const accounts = await api.listAccounts();
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const byNum = (num: string) => accounts.find((a: any) => String(a.AcctNum) === num || String(a.Name).startsWith(num));
+    const idOf = (a: any) => (a ? String(a.Id) : '');
+    const invSLC = idOf(byNum('11900')) || '91';
+    const invBoise = idOf(byNum('11901'));
+    const discSLC = idOf(accounts.find((a: any) => /vendor discounts slc/i.test(String(a.Name))));
+    const discBoise = idOf(accounts.find((a: any) => /vendor discounts boise/i.test(String(a.Name))));
+    const discGeneric = idOf(accounts.find((a: any) => String(a.Name).trim().toLowerCase() === 'vendor discounts'));
+
+    type M = { month: string; invSLC: number; invBoise: number; discSLC: number; discBoise: number; discGeneric: number };
+    const months = new Map<string, M>();
+    const row = (d: string) => {
+      const m = (d || '').slice(0, 7);
+      let r = months.get(m);
+      if (!r) { r = { month: m, invSLC: 0, invBoise: 0, discSLC: 0, discBoise: 0, discGeneric: 0 }; months.set(m, r); }
+      return r;
+    };
+    // sign convention: inventory = positive dollars purchased; discounts =
+    // positive dollars of benefit (a negative bill line or a vendor-credit
+    // line both REDUCE cost, i.e. positive benefit).
+    const scan = (t: any, lineAcct: (l: any) => any, amt: (l: any) => number, benefitSign: number) => {
+      for (const l of t.Line || []) {
+        const acct = String(lineAcct(l) || '');
+        if (!acct) continue;
+        const a = amt(l);
+        const r = row(t.TxnDate);
+        // Inventory: bills/purchases add (+a), vendor credits subtract (−a).
+        if (acct === invSLC) r.invSLC += benefitSign === 1 ? a : -a;
+        if (acct === invBoise) r.invBoise += benefitSign === 1 ? a : -a;
+        // Discounts as positive benefit: a negative bill line (−a → +benefit)
+        // or a positive vendor-credit line both reduce cost.
+        if (acct === discSLC) r.discSLC += benefitSign === 1 ? -a : a;
+        if (acct === discBoise) r.discBoise += benefitSign === 1 ? -a : a;
+        if (acct === discGeneric) r.discGeneric += benefitSign === 1 ? -a : a;
+      }
+    };
+    const abed = (l: any) => (l.DetailType === 'AccountBasedExpenseLineDetail' ? l.AccountBasedExpenseLineDetail?.AccountRef?.value : null);
+    const lineAmt = (l: any) => Number(l.Amount) || 0;
+    for (const b of await api.queryByDateRange('Bill', range.start, range.end)) scan(b, abed, lineAmt, 1);
+    for (const p of await api.queryByDateRange('Purchase', range.start, range.end)) {
+      const sign = p.Credit === true ? -1 : 1;
+      scan(p, abed, (l) => sign * lineAmt(l), 1);
+    }
+    for (const vc of await api.queryByDateRange('VendorCredit', range.start, range.end)) scan(vc, abed, lineAmt, -1);
+    for (const je of await api.queryByDateRange('JournalEntry', range.start, range.end)) {
+      scan(je, (l) => l.JournalEntryLineDetail?.AccountRef?.value, (l) => ((l.JournalEntryLineDetail?.PostingType === 'Credit' ? -1 : 1) * lineAmt(l)), 1);
+    }
+    const out = [...months.values()].sort((a, b) => a.month.localeCompare(b.month)).map((m) => ({
+      month: m.month,
+      inventorySLC: r2(m.invSLC),
+      inventoryBoise: r2(m.invBoise),
+      discountSLC: r2(m.discSLC),
+      discountBoise: r2(m.discBoise),
+      discountGeneric: r2(m.discGeneric),
+    }));
+    const sum = (k: string) => r2(out.reduce((s: number, m: any) => s + m[k], 0));
+    const tInvS = sum('inventorySLC'), tInvB = sum('inventoryBoise'), tDS = sum('discountSLC'), tDB = sum('discountBoise');
+    res.json({
+      start: range.start, end: range.end, months: out,
+      totals: {
+        inventorySLC: tInvS, inventoryBoise: tInvB,
+        discountSLC: tDS, discountBoise: tDB, discountGeneric: sum('discountGeneric'),
+        pctSLC: tInvS > 0 ? r2((tDS / tInvS) * 100) : null,
+        pctBoise: tInvB > 0 ? r2((tDB / tInvB) * 100) : null,
+      },
+      note: 'Inventory = billed purchases coded to each location inventory account (net of vendor credits). Discounts = postings to the location Vendor Discounts accounts (positive = benefit). Percentages are discount ÷ billed inventory for the same window.',
+    });
+  })
+);
+
 /** A/P audit: per-vendor open balances, so a negative total A/P can be traced
  * to the specific vendors who are overpaid / carrying unapplied credits.
  * Read-only. */
