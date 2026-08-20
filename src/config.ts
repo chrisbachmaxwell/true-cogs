@@ -34,6 +34,12 @@ export interface AppConfig {
   /** Resend API key for magic-link sign-in emails (D36). Absent = email
    * sign-in offline; password sign-in always remains available. */
   resendApiKey: string | undefined;
+  /** Generic SMTP (D36a) — works with Gmail app passwords, Microsoft 365,
+   * or any mail provider; takes precedence over Resend when set. */
+  smtpHost: string | undefined;
+  smtpPort: number;
+  smtpUser: string | undefined;
+  smtpPass: string | undefined;
   /** From-address for sign-in emails. Resend's shared onboarding sender works
    * out of the box; a verified pictureline.com sender is nicer. */
   authFromEmail: string;
@@ -76,7 +82,11 @@ export const config: AppConfig = {
   agentPassword: process.env.AGENT_PASSWORD,
   agentIsAdmin: process.env.AGENT_IS_ADMIN === 'true',
   resendApiKey: process.env.RESEND_API_KEY,
-  authFromEmail: process.env.AUTH_FROM_EMAIL || 'Pictureline Reports <onboarding@resend.dev>',
+  smtpHost: process.env.SMTP_HOST,
+  smtpPort: Number(process.env.SMTP_PORT) || 587,
+  smtpUser: process.env.SMTP_USER,
+  smtpPass: process.env.SMTP_PASS,
+  authFromEmail: process.env.AUTH_FROM_EMAIL || process.env.SMTP_USER || 'Pictureline Reports <onboarding@resend.dev>',
 };
 
 /** Missing env vars are reported per-feature instead of crashing the whole app,

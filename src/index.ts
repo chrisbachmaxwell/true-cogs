@@ -96,20 +96,31 @@ app.post(
 // Email-first: approved users type their email and get a one-time link.
 // Passwords stay as the fallback (and as the agent service account's path).
 
-/** Sends the sign-in link via Resend. Never logs the token. */
+const emailConfigured = () => Boolean(config.smtpHost || config.resendApiKey);
+
+/** Sends the sign-in link — via generic SMTP (Gmail/Microsoft 365/anything)
+ * when configured, else the Resend API. Never logs the token. */
 async function sendLoginEmail(to: string, link: string): Promise<void> {
+  const subject = 'Your Pictureline sign-in link';
+  const html =
+    `<p>Click to sign in to Pictureline Cash Reports:</p>` +
+    `<p><a href="${link}" style="display:inline-block;background:#0a84ff;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px">Sign in</a></p>` +
+    `<p style="color:#777;font-size:13px">This link works once and expires in 15 minutes. If you didn’t request it, you can ignore this email.</p>`;
+  if (config.smtpHost) {
+    const nodemailer = await import('nodemailer');
+    const transport = nodemailer.createTransport({
+      host: config.smtpHost,
+      port: config.smtpPort,
+      secure: config.smtpPort === 465,
+      auth: config.smtpUser ? { user: config.smtpUser, pass: config.smtpPass } : undefined,
+    });
+    await transport.sendMail({ from: config.authFromEmail, to, subject, html });
+    return;
+  }
   const r = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: { Authorization: `Bearer ${config.resendApiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      from: config.authFromEmail,
-      to: [to],
-      subject: 'Your Pictureline sign-in link',
-      html:
-        `<p>Click to sign in to Pictureline Cash Reports:</p>` +
-        `<p><a href="${link}" style="display:inline-block;background:#0a84ff;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px">Sign in</a></p>` +
-        `<p style="color:#777;font-size:13px">This link works once and expires in 15 minutes. If you didn’t request it, you can ignore this email.</p>`,
-    }),
+    body: JSON.stringify({ from: config.authFromEmail, to: [to], subject, html }),
   });
   if (!r.ok) throw new Error(`sign-in email could not be sent (HTTP ${r.status})`);
 }
@@ -118,7 +129,7 @@ app.post(
   '/auth/login-link',
   asyncRoute(async (req, res) => {
     if (!(await authEnabled())) return res.status(503).json({ error: 'Sign-in is not set up yet' });
-    if (!config.resendApiKey) {
+    if (!emailConfigured()) {
       return res.status(503).json({ error: 'Email sign-in isn’t switched on yet — use your password below for now.' });
     }
     const email = String(req.body?.email || '').trim();
