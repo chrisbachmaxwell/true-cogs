@@ -15,37 +15,66 @@
   .auth-card button { width: 100%; margin-top: 18px; font: inherit; font-size: 14px; font-weight: 600; color: #fff; background: var(--accent); border: 0; border-radius: 10px; padding: 11px; cursor: pointer; }
   .auth-card button:disabled { opacity: .6; cursor: default; }
   .auth-err { color: var(--bad); font-size: 13px; margin-top: 12px; min-height: 18px; }
+  .auth-ok { color: var(--good, #1a7f37); font-size: 13px; margin-top: 12px; }
+  .auth-alt { display:block; text-align:center; margin-top: 14px; font-size: 12.5px; color: var(--ink-3); cursor: pointer; text-decoration: underline; background:none; border:0; width:auto; padding:0; font-weight:400; }
+  .hidden { display: none; }
 </style>
 </head>
 <body>
 <div class="auth-wrap">
   <div class="auth-card">
     <h1>Pictureline <span style="color:var(--ink-3);font-weight:400">Cash Reports</span></h1>
-    <p>Sign in to see the reports.</p>
+    <p>Type your email and we’ll send you a sign-in link.</p>
     <form id="f">
       <label for="email">Email</label>
       <input id="email" type="email" autocomplete="username" required>
-      <label for="password">Password</label>
-      <input id="password" type="password" autocomplete="current-password" required>
-      <button id="btn" type="submit">Sign in</button>
+      <div id="pwRow" class="hidden">
+        <label for="password">Password</label>
+        <input id="password" type="password" autocomplete="current-password">
+      </div>
+      <button id="btn" type="submit">Email me a sign-in link</button>
+      <div class="auth-ok hidden" id="ok"></div>
       <div class="auth-err" id="err"></div>
     </form>
+    <button class="auth-alt" id="toggle" type="button">Use a password instead</button>
   </div>
 </div>
 <script>
-document.getElementById('f').addEventListener('submit', async (e) => {
+let mode = 'link';
+const $ = (id) => document.getElementById(id);
+if (new URLSearchParams(location.search).get('expired')) {
+  $('err').textContent = 'That sign-in link expired or was already used — request a fresh one.';
+}
+$('toggle').addEventListener('click', () => {
+  mode = mode === 'link' ? 'password' : 'link';
+  $('pwRow').classList.toggle('hidden', mode === 'link');
+  $('password').required = mode === 'password';
+  $('btn').textContent = mode === 'link' ? 'Email me a sign-in link' : 'Sign in';
+  $('toggle').textContent = mode === 'link' ? 'Use a password instead' : 'Email me a link instead';
+  $('ok').classList.add('hidden'); $('err').textContent = '';
+});
+$('f').addEventListener('submit', async (e) => {
   e.preventDefault();
-  const btn = document.getElementById('btn');
-  const err = document.getElementById('err');
-  btn.disabled = true; err.textContent = '';
+  const btn = $('btn'), err = $('err'), ok = $('ok');
+  btn.disabled = true; err.textContent = ''; ok.classList.add('hidden');
   try {
+    if (mode === 'link') {
+      const res = await fetch('/auth/login-link', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: $('email').value }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { err.textContent = d.error || 'Something went wrong. Try again.'; btn.disabled = false; return; }
+      ok.textContent = d.message || 'Check your email for the sign-in link.';
+      ok.classList.remove('hidden');
+      btn.textContent = 'Link sent — check your email';
+      // leave the button disabled briefly to discourage rapid re-sends
+      setTimeout(() => { btn.disabled = false; btn.textContent = 'Send it again'; }, 20000);
+      return;
+    }
     const res = await fetch('/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        email: document.getElementById('email').value,
-        password: document.getElementById('password').value,
-      }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: $('email').value, password: $('password').value }),
     });
     const d = await res.json().catch(() => ({}));
     if (!res.ok) { err.textContent = d.error || 'Sign-in failed. Try again.'; btn.disabled = false; return; }

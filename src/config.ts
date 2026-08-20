@@ -31,6 +31,12 @@ export interface AppConfig {
   agentEmail: string | undefined;
   agentPassword: string | undefined;
   agentIsAdmin: boolean;
+  /** Resend API key for magic-link sign-in emails (D36). Absent = email
+   * sign-in offline; password sign-in always remains available. */
+  resendApiKey: string | undefined;
+  /** From-address for sign-in emails. Resend's shared onboarding sender works
+   * out of the box; a verified pictureline.com sender is nicer. */
+  authFromEmail: string;
 }
 
 export const config: AppConfig = {
@@ -69,6 +75,8 @@ export const config: AppConfig = {
   agentEmail: process.env.AGENT_EMAIL,
   agentPassword: process.env.AGENT_PASSWORD,
   agentIsAdmin: process.env.AGENT_IS_ADMIN === 'true',
+  resendApiKey: process.env.RESEND_API_KEY,
+  authFromEmail: process.env.AUTH_FROM_EMAIL || 'Pictureline Reports <onboarding@resend.dev>',
 };
 
 /** Missing env vars are reported per-feature instead of crashing the whole app,

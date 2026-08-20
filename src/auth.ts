@@ -217,6 +217,39 @@ export function loginRateLimited(email: string): boolean {
   return false;
 }
 
+// ---- magic-link sign-in (D36): one-time emailed tokens ----
+// Only the SHA-256 of the token is stored, so a database leak can't mint
+// sessions; tokens are single-use and expire in 15 minutes.
+
+export async function createLoginToken(email: string): Promise<string | null> {
+  const user = await getUser(email);
+  if (!user) return null; // caller answers generically either way
+  const token = crypto.randomBytes(32).toString('base64url');
+  const hash = crypto.createHash('sha256').update(token).digest('hex');
+  await getPool().query(`DELETE FROM login_tokens WHERE expires_at < now() - interval '1 day'`);
+  await getPool().query(
+    `INSERT INTO login_tokens (token_hash, email, expires_at) VALUES ($1, $2, now() + interval '15 minutes')`,
+    [hash, normalize(email)]
+  );
+  return token;
+}
+
+/** Marks the token used and returns its email — or null if unknown, expired,
+ * already used, or the user has since been removed. */
+export async function redeemLoginToken(token: string): Promise<string | null> {
+  if (!token || token.length > 128) return null;
+  const hash = crypto.createHash('sha256').update(token).digest('hex');
+  const r = await getPool().query(
+    `UPDATE login_tokens SET used = true
+     WHERE token_hash = $1 AND used = false AND expires_at > now()
+     RETURNING email`,
+    [hash]
+  );
+  const email = r.rows[0]?.email as string | undefined;
+  if (!email) return null;
+  return (await getUser(email)) ? email : null;
+}
+
 /** Verifies credentials. Generic null on any failure — no enumeration. */
 export async function verifyLogin(email: string, password: string): Promise<User | null> {
   if (loginRateLimited(email)) {
