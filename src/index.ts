@@ -1008,6 +1008,59 @@ app.get(
   })
 );
 
+/** Historical A/P by vendor: reconstructs each vendor's open-bill balance AS OF
+ * a past date (bills dated ≤ date minus bill-payment coverage dated ≤ date —
+ * QuickBooks itself only stores current balances). Read-only. */
+app.get(
+  '/api/ap-as-of',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const date = String(req.query.date || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'Provide ?date=YYYY-MM-DD' });
+    const api = await getComputeApi();
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const START = '2021-01-01';
+    const bills = await api.queryByDateRange('Bill', START, date);
+    const billVendor = new Map<string, string>();
+    const billTotal = new Map<string, number>();
+    for (const b of bills) {
+      const id = String(b.Id);
+      billVendor.set(id, b.VendorRef?.name || 'Unknown vendor');
+      billTotal.set(id, Number(b.TotalAmt) || 0);
+    }
+    // Coverage: bill-payment lines linked to a bill count at their full covered
+    // amount (cash + applied credits blended) — exactly what closes a bill.
+    const covered = new Map<string, number>();
+    for (const bp of await api.queryByDateRange('BillPayment', START, date)) {
+      for (const line of bp.Line || []) {
+        const linked = (line.LinkedTxn || []).find((t: any) => t.TxnType === 'Bill');
+        if (!linked) continue;
+        const id = String(linked.TxnId);
+        covered.set(id, (covered.get(id) || 0) + (Number(line.Amount) || 0));
+      }
+    }
+    const byVendor = new Map<string, { vendor: string; open: number; openBills: number }>();
+    let total = 0;
+    for (const [id, t] of billTotal) {
+      const open = r2(Math.max(t - (covered.get(id) || 0), 0));
+      if (open < 0.01) continue;
+      const vn = billVendor.get(id)!;
+      let v = byVendor.get(vn);
+      if (!v) { v = { vendor: vn, open: 0, openBills: 0 }; byVendor.set(vn, v); }
+      v.open = r2(v.open + open);
+      v.openBills++;
+      total = r2(total + open);
+    }
+    const vendors = [...byVendor.values()].sort((a, b) => b.open - a.open);
+    res.json({
+      asOf: date,
+      totalOpen: total,
+      vendors: vendors.slice(0, Math.max(1, Math.min(Number(req.query.top) || 25, 100))),
+      note: 'Reconstructed from bills minus payment coverage through the date. Bills fully covered later (or by credits applied later) still show open here — that is correct for a point-in-time view. Compare totalOpen to the balance-sheet A/P for the same date; small gaps = credits applied without a bill-payment record or pre-2021 history.',
+    });
+  })
+);
+
 /** Tag scan: how are bills/purchases tagged by store? Reports the distribution
  * of QuickBooks Location (DepartmentRef) and line-level Class tags over a
  * range, with inventory dollars per tag — read-only discovery for the
