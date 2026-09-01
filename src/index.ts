@@ -1080,6 +1080,35 @@ app.get(
   })
 );
 
+/** Vendor payment rhythm: bill-payment cash per vendor per month, straight
+ * from the mirror — shows which brands get paid continuously (the discount
+ * vendors) vs swept in lump-sum cleanups. Read-only. */
+app.get(
+  '/api/vendor-payments',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const range = validDateRange(req, res);
+    if (!range) return;
+    const api = await getComputeApi();
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const byVendor = new Map<string, Record<string, number>>();
+    for (const bp of await api.queryByDateRange('BillPayment', range.start, range.end)) {
+      const cash = Number(bp.TotalAmt) || 0;
+      if (cash <= 0) continue;
+      const vn = bp.VendorRef?.name || 'Unknown vendor';
+      const m = String(bp.TxnDate || '').slice(0, 7);
+      const row = byVendor.get(vn) || {};
+      row[m] = r2((row[m] || 0) + cash);
+      byVendor.set(vn, row);
+    }
+    const vendors = [...byVendor.entries()]
+      .map(([vendor, months]) => ({ vendor, total: r2(Object.values(months).reduce((s, v) => s + v, 0)), months }))
+      .sort((a, b) => b.total - a.total)
+      .slice(0, Math.max(1, Math.min(Number(req.query.top) || 20, 60)));
+    res.json({ start: range.start, end: range.end, vendors });
+  })
+);
+
 /** Historical A/P by vendor: reconstructs each vendor's open-bill balance AS OF
  * a past date (bills dated ≤ date minus bill-payment coverage dated ≤ date —
  * QuickBooks itself only stores current balances). Read-only. */
