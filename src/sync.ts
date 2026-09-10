@@ -22,6 +22,7 @@ export const SYNCED_ENTITIES: EntityName[] = [
   'VendorCredit',
   'Transfer',
   'JournalEntry',
+  'CreditCardPayment',
 ];
 
 const LAST_SYNC_KEY = 'last_sync_at';
@@ -40,7 +41,7 @@ export async function syncStatus(): Promise<SyncStatus> {
   return { running, lastSyncAt: await getConfigValue(LAST_SYNC_KEY), lastResult };
 }
 
-async function upsertTxns(entity: string, txns: any[]): Promise<number> {
+export async function upsertTxns(entity: string, txns: any[]): Promise<number> {
   const db = getPool();
   let n = 0;
   for (const t of txns) {
@@ -74,6 +75,13 @@ async function syncAccounts(api: QboApi): Promise<number> {
 
 /** Runs a sync. Full = re-pull the whole window; otherwise only entities
  * changed since the last sync (with a 1h overlap for clock skew). */
+/** Registered by the server: recomputes commonly viewed statements after a
+ * sync lands, so users hit warm caches instead of the cold path. */
+let onSyncComplete: (() => void) | null = null;
+export function setOnSyncComplete(fn: () => void): void {
+  onSyncComplete = fn;
+}
+
 export async function runSync(full: boolean): Promise<string> {
   if (running) return 'already running';
   running = true;
@@ -94,12 +102,29 @@ export async function runSync(full: boolean): Promise<string> {
         txns = await api.queryChangedSince!(entity, since);
       }
       const n = await upsertTxns(entity, txns);
+      // Hard deletes leave no trace for incremental sync; a full pull is the
+      // complete truth for the window, so purge mirror rows QBO no longer has
+      // (otherwise deleted transactions keep counting — bit us during the ACH
+      // cleanup when deleted feed expenses lingered in the mirror).
+      if (doFull) {
+        const freshIds = txns.map((t) => String(t.Id));
+        const res = await getPool().query(
+          `DELETE FROM qbo_txns
+           WHERE entity_type = $1 AND txn_date >= $2 AND txn_date <= $3
+             AND NOT (id = ANY($4))`,
+          [entity, SYNC_START, today, freshIds]
+        );
+        if (res.rowCount) counts.push(`${entity}-purged:${res.rowCount}`);
+      }
       counts.push(`${entity}:${n}`);
     }
     counts.push(`Account:${await syncAccounts(api)}`);
     await setConfigValue(LAST_SYNC_KEY, startedAt);
     lastResult = `${doFull ? 'full' : 'incremental'} sync ok @ ${startedAt} — ${counts.join(' ')}`;
     console.log(`[sync] ${lastResult}`);
+    // Re-warm the report caches the sync may have just invalidated, so the
+    // next page load never pays the cold-compute cost.
+    if (onSyncComplete) setTimeout(() => onSyncComplete!(), 0);
     return lastResult;
   } catch (err: any) {
     lastResult = `sync failed @ ${startedAt}: ${err.message}`;
@@ -145,7 +170,28 @@ export function makeLocalApi(remote: QboApi): QboApi {
       await upsertTxns('Bill', [bill]);
       return bill;
     },
+    async getBills(ids: string[]) {
+      if (!ids.length) return [];
+      const res = await db.query(`SELECT data FROM qbo_txns WHERE entity_type = 'Bill' AND id = ANY($1)`, [ids.map(String)]);
+      const found = res.rows.map((r) => r.data);
+      const have = new Set(found.map((b: any) => String(b.Id)));
+      for (const id of ids) {
+        if (have.has(String(id))) continue;
+        try {
+          const bill = await remote.getBill(String(id));
+          await upsertTxns('Bill', [bill]);
+          found.push(bill);
+        } catch { /* deleted or unreachable — caller treats as missing */ }
+      }
+      return found;
+    },
     getInvoice: (id) => remote.getInvoice(id),
+    async getPurchase(id: string) {
+      const res = await db.query(`SELECT data FROM qbo_txns WHERE entity_type = 'Purchase' AND id = $1`, [id]);
+      if (res.rows.length) return res.rows[0].data;
+      if (!remote.getPurchase) throw new Error('Purchase not found in mirror');
+      return remote.getPurchase(id);
+    },
     async listAccounts() {
       const res = await db.query(`SELECT data FROM qbo_txns WHERE entity_type = 'Account'`);
       if (res.rows.length) return res.rows.map((r) => r.data);
@@ -155,4 +201,22 @@ export function makeLocalApi(remote: QboApi): QboApi {
     balanceSheet: (asOf) => remote.balanceSheet(asOf),
     profitAndLoss: (s, e) => remote.profitAndLoss(s, e),
   };
+}
+
+/** True if any mirrored transaction dated inside [start, end] has been edited
+ * in QuickBooks since `computedAt` — used to auto-invalidate cached results
+ * when Chris recategorizes history. (Edits that MOVE a transaction out of the
+ * range or hard-delete it are invisible to this check; the Refresh button and
+ * full syncs remain the backstop for those.) */
+export async function mirrorChangedSince(start: string, end: string, computedAt: Date): Promise<boolean> {
+  try {
+    const r = await getPool().query(
+      `SELECT max(last_updated) AS m FROM qbo_txns WHERE txn_date BETWEEN $1 AND $2`,
+      [start, end]
+    );
+    const m = r.rows[0]?.m;
+    return m !== null && m !== undefined && new Date(m) > computedAt;
+  } catch {
+    return false; // if the mirror is unreachable the cache is the best we have
+  }
 }

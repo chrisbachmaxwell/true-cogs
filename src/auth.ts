@@ -112,11 +112,23 @@ export async function bootstrapAdmin(): Promise<void> {
       console.warn('[auth] no users and no ADMIN_EMAIL/ADMIN_INITIAL_PASSWORD set — dashboard remains open');
     }
   }
-  // Create-only: an admin can reset or remove the agent account from /users
-  // without a redeploy resurrecting the old password.
-  if (config.agentEmail && config.agentPassword && !(await getUser(config.agentEmail))) {
-    await upsertUser(config.agentEmail, config.agentPassword, { isAdmin: config.agentIsAdmin, mustChange: false });
-    console.log(`[auth] seeded agent account ${normalize(config.agentEmail)}${config.agentIsAdmin ? ' (admin)' : ''}`);
+  // Create-only for the password: an admin can reset or remove the agent
+  // account from /users without a redeploy resurrecting the old password.
+  // The admin FLAG, however, always follows AGENT_IS_ADMIN so Chris can grant
+  // or revoke the agent's admin access with one env change + redeploy.
+  if (config.agentEmail && config.agentPassword) {
+    const agent = await getUser(config.agentEmail);
+    if (!agent) {
+      await upsertUser(config.agentEmail, config.agentPassword, { isAdmin: config.agentIsAdmin, mustChange: false });
+      console.log(`[auth] seeded agent account ${normalize(config.agentEmail)}${config.agentIsAdmin ? ' (admin)' : ''}`);
+    } else if (agent.isAdmin !== config.agentIsAdmin) {
+      await getPool().query(`UPDATE users SET is_admin = $2 WHERE email = $1`, [
+        normalize(config.agentEmail),
+        config.agentIsAdmin,
+      ]);
+      invalidateEnabledCache();
+      console.log(`[auth] agent account ${normalize(config.agentEmail)} is_admin -> ${config.agentIsAdmin}`);
+    }
   }
 }
 
@@ -203,6 +215,39 @@ export function loginRateLimited(email: string): boolean {
   times.push(now);
   recentAttempts.set(normalize(email), times);
   return false;
+}
+
+// ---- magic-link sign-in (D36): one-time emailed tokens ----
+// Only the SHA-256 of the token is stored, so a database leak can't mint
+// sessions; tokens are single-use and expire in 15 minutes.
+
+export async function createLoginToken(email: string): Promise<string | null> {
+  const user = await getUser(email);
+  if (!user) return null; // caller answers generically either way
+  const token = crypto.randomBytes(32).toString('base64url');
+  const hash = crypto.createHash('sha256').update(token).digest('hex');
+  await getPool().query(`DELETE FROM login_tokens WHERE expires_at < now() - interval '1 day'`);
+  await getPool().query(
+    `INSERT INTO login_tokens (token_hash, email, expires_at) VALUES ($1, $2, now() + interval '15 minutes')`,
+    [hash, normalize(email)]
+  );
+  return token;
+}
+
+/** Marks the token used and returns its email — or null if unknown, expired,
+ * already used, or the user has since been removed. */
+export async function redeemLoginToken(token: string): Promise<string | null> {
+  if (!token || token.length > 128) return null;
+  const hash = crypto.createHash('sha256').update(token).digest('hex');
+  const r = await getPool().query(
+    `UPDATE login_tokens SET used = true
+     WHERE token_hash = $1 AND used = false AND expires_at > now()
+     RETURNING email`,
+    [hash]
+  );
+  const email = r.rows[0]?.email as string | undefined;
+  if (!email) return null;
+  return (await getUser(email)) ? email : null;
 }
 
 /** Verifies credentials. Generic null on any failure — no enumeration. */

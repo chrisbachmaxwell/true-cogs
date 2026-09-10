@@ -29,6 +29,10 @@ export interface MonthlyPnl {
     salesReceipts: number;
     invoicePayments: number;
     refunds: number;
+    /** Customer refunds paid OUT of a bank account as feed expenses coded to an
+     * income account (PayPal/eBay/marketplace refunds). QuickBooks nets these
+     * inside the income row; deducted here so income matches the books' row. */
+    feedRefunds: number;
     total: number;
   };
   /** Reference metric: everything that hit Bank-type accounts. */
@@ -79,6 +83,29 @@ export function depositRetailPortion(deposit: any, retailIds: Set<string>): numb
   return sum;
 }
 
+/** Sum of bank-funded Purchase lines coded to income accounts — customer
+ * refunds paid out through the bank feed. Credits reverse the sign. */
+export function purchaseIncomePortion(
+  purchases: any[],
+  bankIds: Set<string>,
+  retailIds: Set<string>
+): number {
+  let sum = 0;
+  for (const p of purchases || []) {
+    if (!bankIds.has(String(p?.AccountRef?.value))) continue;
+    const sign = p.Credit === true ? -1 : 1;
+    for (const line of p.Line || []) {
+      if (
+        line.DetailType === 'AccountBasedExpenseLineDetail' &&
+        retailIds.has(String(line.AccountBasedExpenseLineDetail?.AccountRef?.value))
+      ) {
+        sum += sign * (Number(line.Amount) || 0);
+      }
+    }
+  }
+  return sum;
+}
+
 /** Sum of item-based sale lines whose item maps to a retail income account. */
 export function itemRetailPortion(
   txn: any,
@@ -123,6 +150,7 @@ export async function computeMonthlyPnl(
   const payments = await api.queryByDateRange('Payment', start, end);
   const refundReceipts = await api.queryByDateRange('RefundReceipt', start, end);
   const deposits = await api.queryByDateRange('Deposit', start, end);
+  const purchases = await api.queryByDateRange('Purchase', start, end);
 
   const totalAmt = (txns: any[]) => txns.reduce((s, t) => s + (Number(t.TotalAmt) || 0), 0);
   const toBank = (t: any) => bankIds.has(t.DepositToAccountRef?.value);
@@ -178,7 +206,14 @@ export async function computeMonthlyPnl(
     );
   }
 
-  const retailTotal = round2(depositRetail + srRetail + paymentRetail - refundRetail);
+  // Money OUT of a bank account coded straight to an income account is a
+  // customer refund paid through the bank feed (PayPal/eBay/Affirm refunds).
+  // The books net these inside the income rows; without this deduction the
+  // app's income overstates by exactly their sum (found 2026-07-17: $63,864
+  // YTD hiding in 40100). Credit=true reverses the sign, mirroring the books.
+  const feedRefunds = round2(purchaseIncomePortion(purchases, bankIds, retailIds));
+
+  const retailTotal = round2(depositRetail + srRetail + paymentRetail - refundRetail - feedRefunds);
 
   // ---- Bank inflows (reference) ----
   const bankDeposits = totalAmt(deposits.filter(toBank));
@@ -195,6 +230,7 @@ export async function computeMonthlyPnl(
       salesReceipts: round2(srRetail),
       invoicePayments: round2(paymentRetail),
       refunds: round2(refundRetail),
+      feedRefunds,
       total: retailTotal,
     },
     bankInflows: {

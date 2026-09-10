@@ -153,3 +153,66 @@ test('empty month yields zeros and null margin', async () => {
   assert.equal(r.retailCashIn.total, 0);
   assert.equal(r.grossMarginPct, null);
 });
+
+test('feed refunds: bank-funded purchases coded to income accounts reduce income', async () => {
+  const api = mockApi({
+    Deposit: [
+      {
+        TotalAmt: 10000,
+        DepositToAccountRef: { value: BANK },
+        Line: [depositLine(RETAIL, 10000)],
+      },
+    ],
+    Purchase: [
+      // A PayPal refund out of the bank, coded straight to Retail Sales.
+      {
+        AccountRef: { value: BANK },
+        Line: [
+          {
+            DetailType: 'AccountBasedExpenseLineDetail',
+            Amount: 150,
+            AccountBasedExpenseLineDetail: { AccountRef: { value: RETAIL } },
+          },
+        ],
+      },
+      // A credit reverses the sign.
+      {
+        AccountRef: { value: BANK },
+        Credit: true,
+        Line: [
+          {
+            DetailType: 'AccountBasedExpenseLineDetail',
+            Amount: 40,
+            AccountBasedExpenseLineDetail: { AccountRef: { value: RETAIL } },
+          },
+        ],
+      },
+      // Not bank-funded (Amex) — ignored.
+      {
+        AccountRef: { value: 'amex' },
+        Line: [
+          {
+            DetailType: 'AccountBasedExpenseLineDetail',
+            Amount: 999,
+            AccountBasedExpenseLineDetail: { AccountRef: { value: RETAIL } },
+          },
+        ],
+      },
+      // Bank-funded but coded to an expense account — not income, ignored.
+      {
+        AccountRef: { value: BANK },
+        Line: [
+          {
+            DetailType: 'AccountBasedExpenseLineDetail',
+            Amount: 500,
+            AccountBasedExpenseLineDetail: { AccountRef: { value: ADVERTISING } },
+          },
+        ],
+      },
+    ],
+  });
+  const r = await computeMonthlyPnl(api, ctx(), '2026-06', 0);
+  assert.equal(r.retailCashIn.feedRefunds, 110); // 150 − 40
+  assert.equal(r.retailCashIn.total, 9890);
+  assert.equal(r.revenueNet, 9890);
+});

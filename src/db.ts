@@ -73,6 +73,16 @@ export async function initDb(): Promise<void> {
     );
   `);
   await db.query(`
+    CREATE TABLE IF NOT EXISTS reclassify_log (
+      txn_id TEXT PRIMARY KEY,
+      before JSONB NOT NULL,
+      after JSONB NOT NULL,
+      moved NUMERIC NOT NULL,
+      reclassified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      reverted_at TIMESTAMPTZ
+    );
+  `);
+  await db.query(`
     CREATE TABLE IF NOT EXISTS monthly_cache (
       month TEXT PRIMARY KEY,
       data JSONB NOT NULL,

@@ -19,6 +19,7 @@ function mockApi(data: {
   purchases?: any[];
   bills?: Record<string, any>;
   billsInMonth?: any[];
+  vendorCredits?: any[];
   journalEntries?: any[];
   deposits?: any[];
 }): QboApi {
@@ -27,6 +28,7 @@ function mockApi(data: {
       if (entity === 'BillPayment') return data.billPayments || [];
       if (entity === 'Purchase') return data.purchases || [];
       if (entity === 'Bill') return data.billsInMonth || [];
+      if (entity === 'VendorCredit') return data.vendorCredits || [];
       if (entity === 'JournalEntry') return data.journalEntries || [];
       if (entity === 'Deposit') return data.deposits || [];
       return [];
@@ -63,9 +65,12 @@ test('inventoryPortionOfLines only counts matching account-based lines', () => {
   assert.equal(inventoryPortionOfLines(bill, MAT_INV), 125.5);
 });
 
-test('bucket 1: vendor-credit-at-payment scenario does not double count', async () => {
-  // $20,000 bill fully coded to inventory; $2,000 vendor credit applied at payment
-  // time so only $18,000 cash left the bank. Expect exactly 18,000.
+test('bucket 1: vendor-credit-at-payment scenario counts only the cash', async () => {
+  // $20,000 bill fully coded to inventory; $2,000 vendor credit applied at
+  // payment so only $18,000 cash left the bank. REAL QBO shape (verified
+  // 2026-07-17 against production payments): the bill-linked line carries the
+  // FULL covered amount ($20,000) and the credit is a separate context line;
+  // TotalAmt carries the actual cash. Expect exactly 18,000.
   const api = mockApi({
     bills: {
       'B1': { Id: 'B1', TotalAmt: 20000, DocNumber: '1001', Line: [expenseLine(MAT_INV, 20000)] },
@@ -74,10 +79,11 @@ test('bucket 1: vendor-credit-at-payment scenario does not double count', async 
       {
         Id: 'BP1',
         TxnDate: '2026-06-10',
+        TotalAmt: 18000,
         PayType: 'Check',
         VendorRef: { name: 'Canon' },
         Line: [
-          { Amount: 18000, LinkedTxn: [{ TxnType: 'Bill', TxnId: 'B1' }] },
+          { Amount: 20000, LinkedTxn: [{ TxnType: 'Bill', TxnId: 'B1' }] },
           { Amount: 2000, LinkedTxn: [{ TxnType: 'VendorCredit', TxnId: 'VC1' }] },
         ],
       },
@@ -308,4 +314,129 @@ test('journal entries and deposits touching the account raise warnings, not tota
   assert.equal(r.warnings.length, 2);
   assert.match(r.warnings[0], /JournalEntry/);
   assert.match(r.warnings[1], /Deposit/);
+});
+
+test('payments funded from an excluded clearing account are left out and reported', async () => {
+  const bill = { Id: 'B1', TotalAmt: 1000, Line: [expenseLine(MAT_INV, 1000)] };
+  const api = mockApi({
+    billPayments: [
+      {
+        Id: 'BP-real', TxnDate: '2026-06-05', PayType: 'Check',
+        VendorRef: { name: 'Canon' },
+        CheckPayment: { BankAccountRef: { value: 'zions' } },
+        Line: [{ Amount: 600, LinkedTxn: [{ TxnType: 'Bill', TxnId: 'B1' }] }],
+      },
+      {
+        Id: 'BP-ach', TxnDate: '2026-06-06', PayType: 'Check',
+        VendorRef: { name: 'Canon' },
+        CheckPayment: { BankAccountRef: { value: 'ach' } },
+        Line: [{ Amount: 400, LinkedTxn: [{ TxnType: 'Bill', TxnId: 'B1' }] }],
+      },
+    ],
+    purchases: [
+      { Id: 'P-ach', TxnDate: '2026-06-07', PaymentType: 'Check', AccountRef: { value: 'ach' }, Line: [expenseLine(MAT_INV, 250)] },
+      { Id: 'P-real', TxnDate: '2026-06-08', PaymentType: 'Cash', AccountRef: { value: 'zions' }, Line: [expenseLine(MAT_INV, 100)] },
+    ],
+    bills: { B1: bill },
+  });
+  const excl = { excludeFundingAccounts: { ids: new Set(['ach']), label: '"ACH"' } };
+  const r = await computeMonthlySpend(api, MAT_INV, '2026-06', excl);
+  assert.equal(r.total, 700); // 600 real bill payment + 100 real purchase
+  assert.equal(r.excludedFundingTotal, 650); // 400 ACH payment + 250 ACH purchase
+  assert.ok(r.transactions.every((t) => t.txnId !== 'BP-ach' && t.txnId !== 'P-ach'));
+  assert.ok(r.warnings.some((w) => w.includes('Excluded $650.00') && w.includes('ACH')));
+  // Without the option, everything counts and nothing is flagged.
+  const r2 = await computeMonthlySpend(api, MAT_INV, '2026-06');
+  assert.equal(r2.total, 1350);
+  assert.equal(r2.excludedFundingTotal, 0);
+});
+
+test('inventory received nets vendor credits and splits its components', async () => {
+  const api = mockApi({
+    billsInMonth: [{ Id: 'B9', TotalAmt: 9000, Line: [expenseLine(MAT_INV, 9000)] }],
+    purchases: [
+      { Id: 'P9', TxnDate: '2026-06-05', PaymentType: 'Cash', Line: [expenseLine(MAT_INV, 500)] },
+    ],
+    vendorCredits: [{ Id: 'VC9', TotalAmt: 300, Line: [expenseLine(MAT_INV, 300)] }],
+  });
+  const r = await computeMonthlySpend(api, MAT_INV, '2026-06');
+  assert.equal(r.billedTotal, 9000);
+  assert.equal(r.directBoughtTotal, 500);
+  assert.equal(r.vendorCreditBooked, 300);
+  assert.equal(r.bookedTotal, 9200); // 9000 + 500 − 300
+});
+
+test('purchases settled: each bill counts at what we paid for it, on its date', async () => {
+  const api = mockApi({
+    billsInMonth: [
+      // Fully settled: $100 bill, $70 cash + $30 credits → counts $70.
+      { Id: 'B10', TxnDate: '2026-06-03', TotalAmt: 100, Balance: 0, VendorRef: { name: 'Canon' }, Line: [expenseLine(MAT_INV, 100)] },
+      // Open: $200 bill, $50 cash so far, $120 still owed → counts $170 ($30 credits already netted).
+      { Id: 'B11', TxnDate: '2026-06-10', TotalAmt: 200, Balance: 120, VendorRef: { name: 'Sony' }, Line: [expenseLine(MAT_INV, 200)] },
+      // Non-inventory bill — ignored.
+      { Id: 'B12', TxnDate: '2026-06-11', TotalAmt: 50, Balance: 0, Line: [expenseLine(OTHER, 50)] },
+    ],
+    billPayments: [
+      { Id: 'BP10', TxnDate: '2026-06-20', Line: [{ Amount: 70, LinkedTxn: [{ TxnType: 'Bill', TxnId: 'B10' }] }] },
+      // Payment next period still attributes to the June bill.
+      { Id: 'BP11', TxnDate: '2026-07-05', Line: [{ Amount: 50, LinkedTxn: [{ TxnType: 'Bill', TxnId: 'B11' }] }] },
+    ],
+    purchases: [
+      { Id: 'P10', TxnDate: '2026-06-15', PaymentType: 'Cash', Line: [expenseLine(MAT_INV, 25)] },
+    ],
+  });
+  const { computePurchasesSettled } = await import('../src/inventorySpend');
+  const r = await computePurchasesSettled(api, MAT_INV, { start: '2026-06-01', end: '2026-06-30' }, '2026-07-17');
+  assert.equal(r.billedNet, 240); // 70 + 170
+  assert.equal(r.directTotal, 25);
+  assert.equal(r.total, 265);
+  assert.equal(r.creditsNetted, 60); // 30 + 30
+  assert.equal(r.openBillCount, 1);
+  const b10 = r.transactions.find((t) => t.txnId === 'B10');
+  assert.equal(b10?.amount, 70);
+  assert.equal(b10?.date, '2026-06-03'); // bill date, not payment date
+});
+
+test('purchases settled: credit-application lines (linked to both credit and bill) are not cash', async () => {
+  const api = mockApi({
+    billsInMonth: [
+      { Id: 'B20', TxnDate: '2026-06-03', TotalAmt: 100, Balance: 0, VendorRef: { name: 'Canon' }, Line: [expenseLine(MAT_INV, 100)] },
+    ],
+    billPayments: [
+      {
+        Id: 'BP20', TxnDate: '2026-06-20',
+        Line: [
+          { Amount: 70, LinkedTxn: [{ TxnType: 'Bill', TxnId: 'B20' }] },
+          // $30 credit applied to the same bill — links both docs; NOT cash.
+          { Amount: 30, LinkedTxn: [{ TxnType: 'VendorCredit', TxnId: 'VC20' }, { TxnType: 'Bill', TxnId: 'B20' }] },
+        ],
+      },
+    ],
+  });
+  const { computePurchasesSettled } = await import('../src/inventorySpend');
+  const r = await computePurchasesSettled(api, MAT_INV, { start: '2026-06-01', end: '2026-06-30' }, '2026-07-17');
+  assert.equal(r.billedNet, 70);
+  assert.equal(r.creditsNetted, 30);
+});
+
+test('bucket 1 counts only the cash share: credit-covered portions are excluded', async () => {
+  // Bill $16,836.50 fully covered by one payment: $6,935.14 cash + $9,901.36
+  // credits (real shape: bill-linked line carries the FULL covered amount,
+  // credit is a separate context line). Only the cash share may count.
+  const bill = { Id: 'B30', TotalAmt: 16836.5, Line: [expenseLine(MAT_INV, 16836.5)] };
+  const api = mockApi({
+    bills: { B30: bill },
+    billPayments: [
+      {
+        Id: 'BP30', TxnDate: '2026-06-10', TotalAmt: 6935.14, PayType: 'Check',
+        Line: [
+          { Amount: 16836.5, LinkedTxn: [{ TxnType: 'Bill', TxnId: 'B30' }] },
+          { Amount: 9901.36, LinkedTxn: [{ TxnType: 'VendorCredit', TxnId: 'VC30' }] },
+        ],
+      },
+    ],
+  });
+  const r = await computeMonthlySpend(api, MAT_INV, '2026-06');
+  assert.equal(r.bucket1Total, 6935.14); // cash only — not the blended 16,836.50
+  assert.equal(r.vendorCreditsApplied, 9901.36);
 });

@@ -27,6 +27,7 @@ export interface PnlDetail {
   invoicePayments: DetailRow[];
   salesReceipts: DetailRow[];
   refunds: DetailRow[];
+  feedRefunds: DetailRow[];
   rebates: DetailRow[];
   reimbursements: DetailRow[];
   sums: {
@@ -34,6 +35,7 @@ export interface PnlDetail {
     invoicePayments: number;
     salesReceipts: number;
     refunds: number;
+    feedRefunds: number;
     rebates: number;
     reimbursements: number;
   };
@@ -127,8 +129,32 @@ export async function computePnlDetail(
   const salesReceipts = customerRows(salesReceiptsTxns, 'SalesReceipt');
   const refunds = customerRows(refundTxns, 'RefundReceipt');
 
+  // Customer refunds paid out through the bank feed: bank-funded Purchases with
+  // lines coded to an income account. Same predicate as purchaseIncomePortion,
+  // itemized so the drill-down sums to the statement's feed-refunds line.
+  const feedRefunds: DetailRow[] = [];
+  for (const p of await api.queryByDateRange('Purchase', start, end)) {
+    if (!bankIds.has(String(p?.AccountRef?.value))) continue;
+    const sign = p.Credit === true ? -1 : 1;
+    for (const line of p.Line || []) {
+      const ref = line.AccountBasedExpenseLineDetail?.AccountRef?.value;
+      if (line.DetailType !== 'AccountBasedExpenseLineDetail' || !retailIds.has(String(ref))) continue;
+      const amt = round2(sign * (Number(line.Amount) || 0));
+      if (amt === 0) continue;
+      feedRefunds.push({
+        date: p.TxnDate,
+        name: p.EntityRef?.name || p.EntityRef?.value || 'Unknown payee',
+        txnType: p.PaymentType === 'Check' ? 'Check' : 'Purchase',
+        txnId: p.Id ? String(p.Id) : null,
+        amount: amt,
+        detail: line.Description || undefined,
+        group: acctName(ref),
+      });
+    }
+  }
+
   const byDate = (a: DetailRow, b: DetailRow) => a.date.localeCompare(b.date);
-  for (const list of [deposits, invoicePayments, salesReceipts, refunds, rebates, reimbursements]) {
+  for (const list of [deposits, invoicePayments, salesReceipts, refunds, feedRefunds, rebates, reimbursements]) {
     list.sort(byDate);
   }
 
@@ -139,6 +165,7 @@ export async function computePnlDetail(
     invoicePayments,
     salesReceipts,
     refunds,
+    feedRefunds,
     rebates,
     reimbursements,
     sums: {
@@ -146,6 +173,7 @@ export async function computePnlDetail(
       invoicePayments: sumOf(invoicePayments),
       salesReceipts: sumOf(salesReceipts),
       refunds: sumOf(refunds),
+      feedRefunds: sumOf(feedRefunds),
       rebates: sumOf(rebates),
       reimbursements: sumOf(reimbursements),
     },

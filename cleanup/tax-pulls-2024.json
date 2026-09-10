@@ -1,0 +1,54 @@
+{
+ "description": "2024 Utah tax remittances mis-filed in 66000 Payroll Expenses (Apr-Jul 2024; bookkeepers coded correctly before and after). Chris extended the tax-pull cleanup to 2024 on 2026-07-17. Same rule as 2023: big month-end pulls -> Sales Tax Payable 21900, small monthlies -> State Tax W/H Payable. The 2025/2026 66000 rows are small non-tax items and are deliberately absent.",
+ "from": "66000",
+ "rows": [
+  {
+   "txnId": "25785",
+   "expectedAmount": 58885.81,
+   "to": "21900",
+   "note": "2024-04-01 Utah sales-tax pull (Feb-Mar sales, paid late)"
+  },
+  {
+   "txnId": "26925",
+   "expectedAmount": 80583.66,
+   "to": "21900",
+   "note": "2024-04-29 Utah sales-tax pull"
+  },
+  {
+   "txnId": "28353",
+   "expectedAmount": 68361.29,
+   "to": "21900",
+   "note": "2024-06-03 Utah sales-tax pull"
+  },
+  {
+   "txnId": "30690",
+   "expectedAmount": 65364.28,
+   "to": "21900",
+   "note": "2024-07-31 Utah sales-tax pull"
+  },
+  {
+   "txnId": "26926",
+   "expectedAmount": 5311.3,
+   "to": "State Tax W/H Payable",
+   "note": "2024-04-29 state withholding pull"
+  },
+  {
+   "txnId": "28074",
+   "expectedAmount": 8369.46,
+   "to": "State Tax W/H Payable",
+   "note": "2024-05-28 state withholding pull"
+  },
+  {
+   "txnId": "29207",
+   "expectedAmount": 8054.88,
+   "to": "State Tax W/H Payable",
+   "note": "2024-06-26 state withholding pull"
+  },
+  {
+   "txnId": "30566",
+   "expectedAmount": 3267.14,
+   "to": "State Tax W/H Payable",
+   "note": "2024-07-29 state withholding pull"
+  }
+ ]
+}

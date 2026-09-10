@@ -17,6 +17,11 @@ export interface AppConfig {
   /** Sales-tax liability account(s): remittances to them are deducted from
    * revenue, because the POS sync books tax-inclusive amounts into income. */
   salesTaxAccounts: string[];
+  /** Pseudo-bank accounts whose payments are EXCLUDED from all cash spend math
+   * (e.g. the unreconciled "ACH" clearing account whose Jul 2024 – Dec 2025
+   * bill payments duplicate real bank payments). Statements show what was
+   * excluded. Remove once the books are repaired. */
+  excludedFundingAccounts: string[];
   /** Seeds the first admin when the users table is empty. Auth is enforced
    * whenever at least one user exists. */
   adminEmail: string | undefined;
@@ -26,6 +31,23 @@ export interface AppConfig {
   agentEmail: string | undefined;
   agentPassword: string | undefined;
   agentIsAdmin: boolean;
+  /** Resend API key for magic-link sign-in emails (D36). Absent = email
+   * sign-in offline; password sign-in always remains available. */
+  resendApiKey: string | undefined;
+  /** Microsoft Graph sender (D36b) — same app registration the careers and
+   * scheduling projects use; preferred over SMTP/Resend when configured. */
+  graphTenantId: string | undefined;
+  graphClientId: string | undefined;
+  graphClientSecret: string | undefined;
+  /** Generic SMTP (D36a) — works with Gmail app passwords, Microsoft 365,
+   * or any mail provider; takes precedence over Resend when set. */
+  smtpHost: string | undefined;
+  smtpPort: number;
+  smtpUser: string | undefined;
+  smtpPass: string | undefined;
+  /** From-address for sign-in emails. Resend's shared onboarding sender works
+   * out of the box; a verified pictureline.com sender is nicer. */
+  authFromEmail: string;
 }
 
 export const config: AppConfig = {
@@ -55,11 +77,24 @@ export const config: AppConfig = {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean),
+  excludedFundingAccounts: (process.env.QBO_EXCLUDED_FUNDING_ACCOUNTS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
   adminEmail: process.env.ADMIN_EMAIL || 'chrism@pictureline.com',
   adminInitialPassword: process.env.ADMIN_INITIAL_PASSWORD,
   agentEmail: process.env.AGENT_EMAIL,
   agentPassword: process.env.AGENT_PASSWORD,
   agentIsAdmin: process.env.AGENT_IS_ADMIN === 'true',
+  resendApiKey: process.env.RESEND_API_KEY,
+  graphTenantId: process.env.GRAPH_TENANT_ID,
+  graphClientId: process.env.GRAPH_CLIENT_ID,
+  graphClientSecret: process.env.GRAPH_CLIENT_SECRET,
+  smtpHost: process.env.SMTP_HOST,
+  smtpPort: Number(process.env.SMTP_PORT) || 587,
+  smtpUser: process.env.SMTP_USER,
+  smtpPass: process.env.SMTP_PASS,
+  authFromEmail: process.env.AUTH_FROM_EMAIL || process.env.SMTP_USER || 'Pictureline Reports <onboarding@resend.dev>',
 };
 
 /** Missing env vars are reported per-feature instead of crashing the whole app,

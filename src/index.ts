@@ -3,13 +3,15 @@ import path from 'path';
 import { config, missingQboConfig } from './config';
 import { initDb, getConfigValue, setConfigValue, getCachedMonth, setCachedMonth, getPool } from './db';
 import { buildAuthUri, handleCallback, createQboApi, connectionStatus, QboApi } from './qbo';
-import { computeMonthlySpend, MonthlySpendResult } from './inventorySpend';
+import { computeMonthlySpend, MonthlySpendResult, SpendOptions } from './inventorySpend';
 import { computeMonthlyPnl, MonthlyPnl, PnlContext } from './pnl';
 import { computePnlDetail, expenseAccountDetail, DetailRow } from './pnlDetail';
 import { computeCashFlow, reportBalances } from './cashflow';
-import { runSync, syncIfStale, syncStatus, isStoreFresh, makeLocalApi } from './sync';
-import { computeBankFlow } from './bankflow';
-import { monthDateRange } from './inventorySpend';
+import { mirrorChangedSince, runSync, syncIfStale, syncStatus, isStoreFresh, makeLocalApi, upsertTxns, setOnSyncComplete } from './sync';
+import { planReclassify, planRevert } from './reclassify';
+import fs from 'fs';
+import { bankFlowDetail, computeBankFlow } from './bankflow';
+import { monthDateRange, positiveLineTotal } from './inventorySpend';
 import {
   authEnabled,
   bootstrapAdmin,
@@ -25,6 +27,9 @@ import {
   deleteUser,
   setSessionCookie,
   clearSessionCookie,
+  createLoginToken,
+  redeemLoginToken,
+  loginRateLimited,
   User,
 } from './auth';
 
@@ -84,6 +89,116 @@ app.post(
     if (!user) return res.status(401).json({ error: 'That email and password combination didn’t work.' });
     setSessionCookie(res, user.email);
     res.json({ ok: true, mustChange: user.mustChange });
+  })
+);
+
+// ---- magic-link sign-in (D36, reversing D24 at Chris's request) ----
+// Email-first: approved users type their email and get a one-time link.
+// Passwords stay as the fallback (and as the agent service account's path).
+
+const graphConfigured = () => Boolean(config.graphTenantId && config.graphClientId && config.graphClientSecret);
+const emailConfigured = () => Boolean(graphConfigured() || config.smtpHost || config.resendApiKey);
+
+// Client-credentials token for Microsoft Graph, cached until ~5 min before
+// expiry (the same app registration the careers/scheduling projects use).
+let graphToken: { value: string; exp: number } | null = null;
+async function getGraphToken(): Promise<string> {
+  if (graphToken && Date.now() < graphToken.exp) return graphToken.value;
+  const r = await fetch(`https://login.microsoftonline.com/${config.graphTenantId}/oauth2/v2.0/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'client_credentials',
+      client_id: config.graphClientId!,
+      client_secret: config.graphClientSecret!,
+      scope: 'https://graph.microsoft.com/.default',
+    }),
+  });
+  if (!r.ok) throw new Error(`Microsoft sign-in token request failed (HTTP ${r.status})`);
+  const d: any = await r.json();
+  graphToken = { value: d.access_token, exp: Date.now() + (Number(d.expires_in) - 300) * 1000 };
+  return graphToken.value;
+}
+
+/** Sends the sign-in link — Microsoft Graph first (the company's own mail),
+ * then generic SMTP, then the Resend API. Never logs the token. */
+async function sendLoginEmail(to: string, link: string): Promise<void> {
+  const subject = 'Your Pictureline sign-in link';
+  const html =
+    `<p>Click to sign in to Pictureline Cash Reports:</p>` +
+    `<p><a href="${link}" style="display:inline-block;background:#0a84ff;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px">Sign in</a></p>` +
+    `<p style="color:#777;font-size:13px">This link works once and expires in 15 minutes. If you didn’t request it, you can ignore this email.</p>`;
+  if (graphConfigured()) {
+    // Graph sends as a real mailbox: strip any "Display Name <addr>" wrapper.
+    const from = (config.authFromEmail.match(/<([^>]+)>/)?.[1] || config.authFromEmail).trim();
+    const token = await getGraphToken();
+    const r = await fetch(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(from)}/sendMail`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: {
+          subject,
+          body: { contentType: 'HTML', content: html },
+          toRecipients: [{ emailAddress: { address: to } }],
+        },
+        saveToSentItems: false,
+      }),
+    });
+    if (!r.ok) throw new Error(`sign-in email could not be sent (Microsoft HTTP ${r.status})`);
+    return;
+  }
+  if (config.smtpHost) {
+    const nodemailer = await import('nodemailer');
+    const transport = nodemailer.createTransport({
+      host: config.smtpHost,
+      port: config.smtpPort,
+      secure: config.smtpPort === 465,
+      auth: config.smtpUser ? { user: config.smtpUser, pass: config.smtpPass } : undefined,
+    });
+    await transport.sendMail({ from: config.authFromEmail, to, subject, html });
+    return;
+  }
+  const r = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${config.resendApiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from: config.authFromEmail, to: [to], subject, html }),
+  });
+  if (!r.ok) throw new Error(`sign-in email could not be sent (HTTP ${r.status})`);
+}
+
+app.post(
+  '/auth/login-link',
+  asyncRoute(async (req, res) => {
+    if (!(await authEnabled())) return res.status(503).json({ error: 'Sign-in is not set up yet' });
+    if (!emailConfigured()) {
+      return res.status(503).json({ error: 'Email sign-in isn’t switched on yet — use your password below for now.' });
+    }
+    const email = String(req.body?.email || '').trim();
+    // One generic answer whether or not the address is on the list.
+    const generic = { ok: true, message: 'If that address is on the approved list, a sign-in link is on its way — check your email.' };
+    if (!email || loginRateLimited(email)) return res.json(generic);
+    const token = await createLoginToken(email);
+    if (token) {
+      const proto = String(req.headers['x-forwarded-proto'] || 'https').split(',')[0];
+      const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0];
+      try {
+        await sendLoginEmail(email, `${proto}://${host}/auth/link?token=${token}`);
+      } catch (err: any) {
+        console.warn(`[auth] ${err.message}`);
+        return res.status(502).json({ error: 'The sign-in email couldn’t be sent just now. Try again in a minute, or use your password below.' });
+      }
+    }
+    res.json(generic);
+  })
+);
+
+app.get(
+  '/auth/link',
+  asyncRoute(async (req, res) => {
+    const email = await redeemLoginToken(String(req.query.token || ''));
+    if (!email) return res.redirect('/login?expired=1');
+    setSessionCookie(res, email);
+    res.redirect('/');
   })
 );
 
@@ -287,24 +402,28 @@ async function getMonthlySpend(
   forceRefresh: boolean,
   accountsParam?: unknown
 ): Promise<MonthlySpendResult> {
-  const tracked = await getTrackedAccounts();
+  const api = await getComputeApi();
+  const tracked = await getTrackedAccounts(api);
   const { ids, viewKey } = selectAccounts(accountsParam, tracked);
+  const { opts, cachePrefix } = await getSpendOpts(api);
   // 'all' keeps the bare-month key so pre-view cache rows stay valid.
-  const cacheKey = viewKey === 'all' ? month : `${month}:${viewKey}`;
+  const cacheKey = cachePrefix + 'sp2:' + (viewKey === 'all' ? month : `${month}:${viewKey}`);
 
   if (!forceRefresh) {
     const cached = await getCachedMonth(cacheKey);
     if (cached) {
       const isClosedMonth = month < currentMonthUtc();
       const fresh = Date.now() - new Date(cached.computedAt).getTime() < CURRENT_MONTH_CACHE_TTL_MS;
-      if (isClosedMonth || fresh) return cached.data as MonthlySpendResult;
+      const { start, end } = monthDateRange(month);
+      if ((isClosedMonth || fresh) && !(await mirrorChangedSince(start, end, new Date(cached.computedAt)))) {
+        return cached.data as MonthlySpendResult;
+      }
     }
     const inFlight = inFlightMonths.get(cacheKey);
     if (inFlight) return inFlight;
   }
   const promise = (async () => {
-    const api = await getComputeApi();
-    const result = await computeMonthlySpend(api, ids, month);
+    const result = await computeMonthlySpend(api, ids, month, opts);
     await setCachedMonth(cacheKey, result);
     return result;
   })().finally(() => inFlightMonths.delete(cacheKey));
@@ -426,6 +545,48 @@ async function getDirectCostAccounts(api: QboApi): Promise<TrackedAccount[]> {
   return tracked;
 }
 
+const EXCLUDED_FUNDING_KEY = 'excluded_funding_accounts_json';
+
+/** Pseudo-bank accounts whose payments are excluded from cash spend math
+ * (QBO_EXCLUDED_FUNDING_ACCOUNTS, e.g. the unreconciled "ACH" clearing
+ * account). Tolerant resolution — a miss disables the exclusion with a log. */
+async function getExcludedFundingAccounts(api: QboApi): Promise<TrackedAccount[]> {
+  if (!config.excludedFundingAccounts.length) return [];
+  const cached = readAccountCache(await getConfigValue(EXCLUDED_FUNDING_KEY), config.excludedFundingAccounts);
+  if (cached) return cached;
+  let tracked: TrackedAccount[] = [];
+  try {
+    const resolved = await resolveAccounts(api, config.excludedFundingAccounts, /ach|clearing/i);
+    tracked = resolved.map((a) => ({ id: String(a.Id), acctNum: a.AcctNum ?? null, name: a.Name }));
+  } catch (err: any) {
+    console.warn('[qbo] excluded-funding account resolution failed:', err.message);
+    return [];
+  }
+  await setConfigValue(
+    EXCLUDED_FUNDING_KEY,
+    JSON.stringify({ tokens: config.excludedFundingAccounts, accounts: tracked })
+  );
+  console.log(`[qbo] excluding payments funded from: ${tracked.map((t) => t.name).join(', ')}`);
+  return tracked;
+}
+
+/** Spend options shared by every cash computation, plus a cache-key prefix so
+ * results computed under an exclusion never mix with unexcluded caches (and
+ * vice versa when the setting is removed after the books are repaired). */
+async function getSpendOpts(api: QboApi): Promise<{ opts: SpendOptions; cachePrefix: string }> {
+  const excluded = await getExcludedFundingAccounts(api);
+  if (!excluded.length) return { opts: {}, cachePrefix: '' };
+  return {
+    opts: {
+      excludeFundingAccounts: {
+        ids: new Set(excluded.map((t) => t.id)),
+        label: excluded.map((t) => `"${t.name}"`).join(', '),
+      },
+    },
+    cachePrefix: 'xf:' + excluded.map((t) => t.id).sort().join('+') + ':',
+  };
+}
+
 const TAX_ACCOUNTS_KEY = 'sales_tax_accounts_json';
 
 /** Sales-tax liability account(s), e.g. #21900. Resolution failure downgrades
@@ -453,7 +614,7 @@ async function getSalesTaxRemitted(api: QboApi, month: string): Promise<{ amount
   const taxAccounts = await getSalesTaxAccounts(api);
   if (!taxAccounts.length) return { amount: 0, source: 'none' };
   const taxIds = taxAccounts.map((t) => t.id);
-  const spend = await computeMonthlySpend(api, taxIds, month);
+  const spend = await computeMonthlySpend(api, taxIds, month, (await getSpendOpts(api)).opts);
   if (spend.total > 0) return { amount: spend.total, source: 'transactions' };
   try {
     const { start, end } = monthDateRange(month);
@@ -462,8 +623,18 @@ async function getSalesTaxRemitted(api: QboApi, month: string): Promise<{ amount
     const a = reportBalances(after);
     let delta = 0;
     for (const id of taxIds) delta += (a.get(id)?.value ?? 0) - (b.get(id)?.value ?? 0);
-    // Balance falling = remittances exceeding recorded collections.
-    return { amount: Math.max(0, Math.round(-delta * 100) / 100), source: 'balance-sheet' };
+    // Accrual-aware: JE credits of collected tax raise the balance without cash
+    // moving, so remitted = accruals − balance change (old behavior when no JEs).
+    const taxIdSet = new Set(taxIds.map(String));
+    let jeAccruals = 0;
+    for (const je of await api.queryByDateRange('JournalEntry', start, end)) {
+      for (const l of je.Line || []) {
+        const d = l.JournalEntryLineDetail;
+        if (!d || !taxIdSet.has(String(d.AccountRef?.value))) continue;
+        jeAccruals += (d.PostingType === 'Credit' ? 1 : -1) * (Number(l.Amount) || 0);
+      }
+    }
+    return { amount: Math.max(0, Math.round((jeAccruals - delta) * 100) / 100), source: 'balance-sheet' };
   } catch {
     return { amount: 0, source: 'unavailable' };
   }
@@ -472,13 +643,17 @@ async function getSalesTaxRemitted(api: QboApi, month: string): Promise<{ amount
 const inFlightPnl = new Map<string, Promise<MonthlyPnl>>();
 
 async function getMonthlyPnl(month: string, forceRefresh: boolean): Promise<MonthlyPnl> {
-  const cacheKey = `pnl:${month}`;
+  const { opts: spendOpts, cachePrefix } = await getSpendOpts(await getComputeApi());
+  const cacheKey = `${cachePrefix}pnl3:${month}`;
   if (!forceRefresh) {
     const cached = await getCachedMonth(cacheKey);
     if (cached) {
       const isClosedMonth = month < currentMonthUtc();
       const fresh = Date.now() - new Date(cached.computedAt).getTime() < CURRENT_MONTH_CACHE_TTL_MS;
-      if (isClosedMonth || fresh) return cached.data as MonthlyPnl;
+      const { start, end } = monthDateRange(month);
+      if ((isClosedMonth || fresh) && !(await mirrorChangedSince(start, end, new Date(cached.computedAt)))) {
+        return cached.data as MonthlyPnl;
+      }
     }
     const inFlight = inFlightPnl.get(cacheKey);
     if (inFlight) return inFlight;
@@ -489,7 +664,7 @@ async function getMonthlyPnl(month: string, forceRefresh: boolean): Promise<Mont
     const tax = await getSalesTaxRemitted(api, month);
     const directIds = (await getDirectCostAccounts(api)).map((t) => t.id);
     const directCosts = directIds.length
-      ? (await computeMonthlySpend(api, directIds, month)).total
+      ? (await computeMonthlySpend(api, directIds, month, spendOpts)).total
       : 0;
     const result = await computeMonthlyPnl(
       api,
@@ -556,8 +731,11 @@ function monthsBetween(start: string, end: string): string[] {
 }
 
 function validRange(req: Request, res: Response): { start: string; end: string; months: string[] } | null {
-  const start = String(req.query.start || '');
-  const end = String(req.query.end || '');
+  // Accept full dates too (the shared range control sends YYYY-MM-DD since the
+  // day-level picker shipped) and reduce them to their months — this endpoint
+  // family works in month granularity.
+  const start = String(req.query.start || '').slice(0, 7);
+  const end = String(req.query.end || '').slice(0, 7);
   if (!/^\d{4}-\d{2}$/.test(start) || !/^\d{4}-\d{2}$/.test(end) || start > end) {
     res.status(400).json({ error: 'Provide ?start=YYYY-MM&end=YYYY-MM with start <= end' });
     return null;
@@ -646,6 +824,1112 @@ const dayBefore = (isoDate: string) => {
   return d.toISOString().slice(0, 10);
 };
 
+/** Register reconstruction for diagnosing a broken account: replays every
+ * mirrored transaction touching the account (funded-by AND coded-to sides)
+ * month by month, so the divergence point and mechanism become visible.
+ * Read-only diagnostic. */
+app.get(
+  '/api/register-history',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const accountId = String(req.query.account || '');
+    if (!accountId) return res.status(400).json({ error: 'Provide ?account=<accountId>' });
+    const start = String(req.query.start || '2020-01-01');
+    const end = String(req.query.end || new Date().toISOString().slice(0, 10));
+    const api = await getComputeApi();
+    const listMode = req.query.list === '1';
+    const txns: any[] = [];
+    const listRow = (side: string, type: string, t: any, amount: number) => {
+      if (listMode) txns.push({ side, type, id: String(t.Id), date: t.TxnDate, amount: Math.round(amount * 100) / 100, who: t.EntityRef?.name || t.AccountRef?.name || '', memo: t.PrivateNote || '' });
+    };
+    const months = new Map<string, any>();
+    const bucket = (date: string) => {
+      const m = (date || '').slice(0, 7);
+      if (!months.has(m)) months.set(m, { month: m, fundedOut: 0, codedIn: 0, codedOut: 0, jeNet: 0, count: 0 });
+      return months.get(m);
+    };
+    const id = String(accountId);
+    for (const p of await api.queryByDateRange('Purchase', start, end)) {
+      const sign = p.Credit === true ? -1 : 1;
+      if (String(p.AccountRef?.value) === id) {
+        // The account PAID for this (card charge / bank withdrawal).
+        const b = bucket(p.TxnDate); b.fundedOut += sign * (Number(p.TotalAmt) || 0); b.count++;
+        listRow('fundedOut', 'Purchase', p, sign * (Number(p.TotalAmt) || 0));
+      }
+      for (const line of p.Line || []) {
+        if (line.DetailType === 'AccountBasedExpenseLineDetail' && String(line.AccountBasedExpenseLineDetail?.AccountRef?.value) === id) {
+          // Money sent TO this account (card paydown) or coded against it.
+          const b = bucket(p.TxnDate); b.codedIn += sign * (Number(line.Amount) || 0); b.count++;
+          listRow('codedIn', 'Purchase', p, sign * (Number(line.Amount) || 0));
+        }
+      }
+    }
+    for (const bp of await api.queryByDateRange('BillPayment', start, end)) {
+      if (String(bp.CreditCardPayment?.CCAccountRef?.value) === id) {
+        const b = bucket(bp.TxnDate); b.fundedOut += Number(bp.TotalAmt) || 0; b.count++;
+      }
+    }
+    // Dedicated pay-down-card transactions: money OUT of BankAccountRef,
+    // INTO CreditCardAccountRef (reduces what's owed on the card).
+    for (const ccp of await api.queryByDateRange('CreditCardPayment', start, end)) {
+      const amt = Number(ccp.Amount) || 0;
+      if (String(ccp.CreditCardAccountRef?.value) === id) {
+        const b = bucket(ccp.TxnDate); b.codedIn += amt; b.count++;
+      }
+      if (String(ccp.BankAccountRef?.value) === id) {
+        const b = bucket(ccp.TxnDate); b.fundedOut += amt; b.count++;
+      }
+    }
+    for (const je of await api.queryByDateRange('JournalEntry', start, end)) {
+      for (const l of je.Line || []) {
+        const d = l.JournalEntryLineDetail;
+        if (!d || String(d.AccountRef?.value) !== id) continue;
+        const b = bucket(je.TxnDate);
+        b.jeNet += (d.PostingType === 'Credit' ? 1 : -1) * (Number(l.Amount) || 0);
+        b.count++;
+      }
+    }
+    for (const dep of await api.queryByDateRange('Deposit', start, end)) {
+      for (const line of dep.Line || []) {
+        if (String(line.DepositLineDetail?.AccountRef?.value) === id) {
+          const b = bucket(dep.TxnDate); b.codedOut += Number(line.Amount) || 0; b.count++;
+        }
+      }
+    }
+    const rows = [...months.values()].sort((a, b) => a.month.localeCompare(b.month));
+    let cumulative = 0;
+    for (const r of rows) {
+      // Liability view: charges (fundedOut) and JE credits raise what's owed;
+      // paydowns (codedIn) and deposit-coded lines reduce it.
+      r.net = Math.round((r.fundedOut - r.codedIn - r.codedOut + r.jeNet) * 100) / 100;
+      cumulative = Math.round((cumulative + r.net) * 100) / 100;
+      r.cumulative = cumulative;
+      r.fundedOut = Math.round(r.fundedOut * 100) / 100;
+      r.codedIn = Math.round(r.codedIn * 100) / 100;
+      r.codedOut = Math.round(r.codedOut * 100) / 100;
+      r.jeNet = Math.round(r.jeNet * 100) / 100;
+    }
+    res.json({ account: accountId, start, end, months: rows, finalCumulative: cumulative, ...(listMode ? { txns } : {}) });
+  })
+);
+
+/** Early-payment-discount / working-capital shift analysis. Around mid-2023
+ * Pictureline moved from paying vendors on 30-60 day terms to paying UPFRONT to
+ * capture early-pay discounts (Canon etc.). That converts vendor float (an
+ * interest-free "loan") into cash tied up in inventory. This traces, by quarter:
+ * (1) vendor discounts captured, (2) how fast bills get paid, (3) the A/P float
+ * level — so the cash impact of the shift is visible. Read-only. */
+app.get(
+  '/api/discount-shift-analysis',
+  requireAuth,
+  asyncRoute(async (_req, res) => {
+    const result = await dedupe('discount-shift', async () => {
+      const api = await getComputeApi();
+      const START = '2021-01-01';
+      const END = new Date().toISOString().slice(0, 10);
+      const r2 = (n: number) => Math.round(n * 100) / 100;
+      const q = (date: string) => {
+        const m = Number((date || '').slice(5, 7));
+        return `${(date || '').slice(0, 4)}-Q${Math.floor((m - 1) / 3) + 1}`;
+      };
+      type Row = { quarter: string; paidCash: number; weightedGapDays: number; upfrontCash: number; termCash: number };
+      const rows = new Map<string, Row>();
+      const row = (quarter: string) => {
+        let r = rows.get(quarter);
+        if (!r) { r = { quarter, paidCash: 0, weightedGapDays: 0, upfrontCash: 0, termCash: 0 }; rows.set(quarter, r); }
+        return r;
+      };
+
+      const bills = await api.queryByDateRange('Bill', START, END);
+      const billById = new Map(bills.map((b: any) => [String(b.Id), b]));
+      const billPayments = await api.queryByDateRange('BillPayment', START, END);
+
+      // (1) Vendor early-pay discounts captured, from the accrual P&L per year —
+      // this is authoritative (the postings don't reliably come through the
+      // transaction feed). The accountant recorded these in "Discounts/Refunds
+      // Given" through 2025, then moved to dedicated "Vendor Discounts" accounts
+      // in 2026; both names are captured here so the timeline is continuous.
+      const discountRe = /vendor discount|discounts\/refunds given/i;
+      const sumPnlAccounts = (report: any, re: RegExp) => {
+        let sum = 0;
+        const walk = (rws: any) => {
+          for (const rr of rws?.Row || []) {
+            const col = rr.ColData;
+            if (col?.length >= 2 && col[0]?.value && re.test(col[0].value)) {
+              const amt = Number(col[col.length - 1]?.value);
+              if (!Number.isNaN(amt)) sum += Math.abs(amt);
+            }
+            if (rr.Rows) walk(rr.Rows);
+          }
+        };
+        walk(report?.Rows);
+        return r2(sum);
+      };
+      const discountsByYear: any[] = [];
+      const thisYear = Number(END.slice(0, 4));
+      for (let y = 2022; y <= thisYear; y++) {
+        const ye = y === thisYear ? END : `${y}-12-31`;
+        try {
+          discountsByYear.push({ year: y, vendorDiscountsCaptured: sumPnlAccounts(await api.profitAndLoss(`${y}-01-01`, ye), discountRe), through: ye });
+        } catch { discountsByYear.push({ year: y, vendorDiscountsCaptured: null, through: ye }); }
+      }
+
+      // (2) Payment timing: gap between bill date and payment date, weighted by
+      // the cash actually applied (D33 cash fraction so credits don't distort).
+      const days = (a: string, b: string) => (new Date(`${a}T00:00:00Z`).getTime() - new Date(`${b}T00:00:00Z`).getTime()) / 86_400_000;
+      for (const bp of billPayments) {
+        const cash = Number(bp.TotalAmt) || 0;
+        if (cash <= 0) continue;
+        let coverage = 0;
+        for (const line of bp.Line || []) {
+          const linked: any[] = line.LinkedTxn || [];
+          if (linked.some((t) => t.TxnType === 'VendorCredit')) continue;
+          if (linked.some((t) => t.TxnType === 'Bill')) coverage += Number(line.Amount) || 0;
+        }
+        const cashFraction = coverage > 0 ? Math.max(0, Math.min(cash / coverage, 1)) : 1;
+        for (const line of bp.Line || []) {
+          const linked: any[] = line.LinkedTxn || [];
+          if (linked.some((t) => t.TxnType === 'VendorCredit')) continue;
+          const lb = linked.find((t) => t.TxnType === 'Bill');
+          if (!lb) continue;
+          const bill = billById.get(String(lb.TxnId));
+          if (!bill) continue;
+          const applied = (Number(line.Amount) || 0) * cashFraction;
+          const gap = Math.max(0, days(bp.TxnDate, bill.TxnDate));
+          const r = row(q(bp.TxnDate));
+          r.paidCash += applied;
+          r.weightedGapDays += applied * gap;
+          if (gap <= 7) r.upfrontCash += applied; else if (gap >= 25) r.termCash += applied;
+        }
+      }
+
+      // (3) A/P float level: the REAL Accounts Payable balance at each quarter
+      // end (the vendor "loan"), read from the balance sheet — the derived
+      // bills-minus-payments version is distorted by vendor credits.
+      const apAcctId = String((await api.listAccounts()).find((a: any) => String(a.AccountType) === 'Accounts Payable')?.Id || '');
+      const quarterEnd: Record<string, string> = {};
+      for (const qtr of rows.keys()) {
+        const [y, qn] = qtr.split('-Q');
+        const endMonth = Number(qn) * 3;
+        const lastDay = new Date(Date.UTC(Number(y), endMonth, 0)).getUTCDate();
+        quarterEnd[qtr] = `${y}-${String(endMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+      }
+      const apAtQuarter: Record<string, number> = {};
+      for (const qtr of [...rows.keys()].sort()) {
+        try {
+          const bal = reportBalances(await api.balanceSheet(quarterEnd[qtr]));
+          apAtQuarter[qtr] = r2(bal.get(apAcctId)?.value ?? 0);
+        } catch { apAtQuarter[qtr] = 0; }
+      }
+
+      const out = [...rows.values()].sort((a, b) => a.quarter.localeCompare(b.quarter)).map((r) => ({
+        quarter: r.quarter,
+        billCashPaid: r2(r.paidCash),
+        avgDaysToPay: r.paidCash > 0 ? r2(r.weightedGapDays / r.paidCash) : null,
+        pctPaidUpfront: r.paidCash > 0 ? r2((r.upfrontCash / r.paidCash) * 100) : null,
+        pctPaidOnTerms: r.paidCash > 0 ? r2((r.termCash / r.paidCash) * 100) : null,
+        apFloatLevel: apAtQuarter[r.quarter],
+      }));
+      return {
+        start: START, end: END, quarters: out, discountsByYear,
+        note: 'discountsByYear reads the accrual P&L for the vendor early-pay discount accounts (recorded in "Discounts/Refunds Given" through 2025, moved to dedicated "Vendor Discounts" accounts in 2026). Payment timing and A/P float are quarterly. A/P float = the real Accounts Payable balance (the vendor "loan").',
+      };
+    });
+    res.json(result);
+  })
+);
+
+/** Location discount tracker: inventory purchased per location (Material
+ * Inventory 11900 = SLC, Boise Inventory 11901) vs the early-pay discounts
+ * posted to each location's Vendor Discounts account, so the two stores'
+ * discount rates can be compared. Read-only. */
+app.get(
+  '/api/location-discounts',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const range = validDateRange(req, res);
+    if (!range) return;
+    const api = await getComputeApi();
+    const accounts = await api.listAccounts();
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const byNum = (num: string) => accounts.find((a: any) => String(a.AcctNum) === num || String(a.Name).startsWith(num));
+    const idOf = (a: any) => (a ? String(a.Id) : '');
+    const invSLC = idOf(byNum('11900')) || '91';
+    const invBoise = idOf(byNum('11901'));
+    const discSLC = idOf(accounts.find((a: any) => /vendor discounts slc/i.test(String(a.Name))));
+    const discBoise = idOf(accounts.find((a: any) => /vendor discounts boise/i.test(String(a.Name))));
+    const discGeneric = idOf(accounts.find((a: any) => String(a.Name).trim().toLowerCase() === 'vendor discounts'));
+
+    type M = { month: string; invSLC: number; invBoise: number; discSLC: number; discBoise: number; discGeneric: number };
+    const months = new Map<string, M>();
+    const row = (d: string) => {
+      const m = (d || '').slice(0, 7);
+      let r = months.get(m);
+      if (!r) { r = { month: m, invSLC: 0, invBoise: 0, discSLC: 0, discBoise: 0, discGeneric: 0 }; months.set(m, r); }
+      return r;
+    };
+    // sign convention: inventory = positive dollars purchased; discounts =
+    // positive dollars of benefit (a negative bill line or a vendor-credit
+    // line both REDUCE cost, i.e. positive benefit).
+    const scan = (t: any, lineAcct: (l: any) => any, amt: (l: any) => number, benefitSign: number) => {
+      for (const l of t.Line || []) {
+        const acct = String(lineAcct(l) || '');
+        if (!acct) continue;
+        const a = amt(l);
+        const r = row(t.TxnDate);
+        // Inventory: bills/purchases add (+a), vendor credits subtract (−a).
+        if (acct === invSLC) r.invSLC += benefitSign === 1 ? a : -a;
+        if (acct === invBoise) r.invBoise += benefitSign === 1 ? a : -a;
+        // Discounts as positive benefit: a negative bill line (−a → +benefit)
+        // or a positive vendor-credit line both reduce cost.
+        if (acct === discSLC) r.discSLC += benefitSign === 1 ? -a : a;
+        if (acct === discBoise) r.discBoise += benefitSign === 1 ? -a : a;
+        if (acct === discGeneric) r.discGeneric += benefitSign === 1 ? -a : a;
+      }
+    };
+    const abed = (l: any) => (l.DetailType === 'AccountBasedExpenseLineDetail' ? l.AccountBasedExpenseLineDetail?.AccountRef?.value : null);
+    const lineAmt = (l: any) => Number(l.Amount) || 0;
+    for (const b of await api.queryByDateRange('Bill', range.start, range.end)) scan(b, abed, lineAmt, 1);
+    for (const p of await api.queryByDateRange('Purchase', range.start, range.end)) {
+      const sign = p.Credit === true ? -1 : 1;
+      scan(p, abed, (l) => sign * lineAmt(l), 1);
+    }
+    for (const vc of await api.queryByDateRange('VendorCredit', range.start, range.end)) scan(vc, abed, lineAmt, -1);
+    for (const je of await api.queryByDateRange('JournalEntry', range.start, range.end)) {
+      scan(je, (l) => l.JournalEntryLineDetail?.AccountRef?.value, (l) => ((l.JournalEntryLineDetail?.PostingType === 'Credit' ? -1 : 1) * lineAmt(l)), 1);
+    }
+    const out = [...months.values()].sort((a, b) => a.month.localeCompare(b.month)).map((m) => ({
+      month: m.month,
+      inventorySLC: r2(m.invSLC),
+      inventoryBoise: r2(m.invBoise),
+      discountSLC: r2(m.discSLC),
+      discountBoise: r2(m.discBoise),
+      discountGeneric: r2(m.discGeneric),
+    }));
+    const sum = (k: string) => r2(out.reduce((s: number, m: any) => s + m[k], 0));
+    const tInvS = sum('inventorySLC'), tInvB = sum('inventoryBoise'), tDS = sum('discountSLC'), tDB = sum('discountBoise');
+    res.json({
+      start: range.start, end: range.end, months: out,
+      totals: {
+        inventorySLC: tInvS, inventoryBoise: tInvB,
+        discountSLC: tDS, discountBoise: tDB, discountGeneric: sum('discountGeneric'),
+        pctSLC: tInvS > 0 ? r2((tDS / tInvS) * 100) : null,
+        pctBoise: tInvB > 0 ? r2((tDB / tInvB) * 100) : null,
+      },
+      note: 'Inventory = billed purchases coded to each location inventory account (net of vendor credits). Discounts = postings to the location Vendor Discounts accounts (positive = benefit). Percentages are discount ÷ billed inventory for the same window.',
+    });
+  })
+);
+
+/** Vendor payment rhythm: bill-payment cash per vendor per month, straight
+ * from the mirror — shows which brands get paid continuously (the discount
+ * vendors) vs swept in lump-sum cleanups. Read-only. */
+app.get(
+  '/api/vendor-payments',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const range = validDateRange(req, res);
+    if (!range) return;
+    const api = await getComputeApi();
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const byVendor = new Map<string, Record<string, number>>();
+    for (const bp of await api.queryByDateRange('BillPayment', range.start, range.end)) {
+      const cash = Number(bp.TotalAmt) || 0;
+      if (cash <= 0) continue;
+      const vn = bp.VendorRef?.name || 'Unknown vendor';
+      const m = String(bp.TxnDate || '').slice(0, 7);
+      const row = byVendor.get(vn) || {};
+      row[m] = r2((row[m] || 0) + cash);
+      byVendor.set(vn, row);
+    }
+    const vendors = [...byVendor.entries()]
+      .map(([vendor, months]) => ({ vendor, total: r2(Object.values(months).reduce((s, v) => s + v, 0)), months }))
+      .sort((a, b) => b.total - a.total)
+      .slice(0, Math.max(1, Math.min(Number(req.query.top) || 20, 60)));
+    res.json({ start: range.start, end: range.end, vendors });
+  })
+);
+
+/** Historical A/P by vendor: reconstructs each vendor's open-bill balance AS OF
+ * a past date (bills dated ≤ date minus bill-payment coverage dated ≤ date —
+ * QuickBooks itself only stores current balances). Read-only. */
+app.get(
+  '/api/ap-as-of',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const date = String(req.query.date || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'Provide ?date=YYYY-MM-DD' });
+    const api = await getComputeApi();
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const START = '2021-01-01';
+    const bills = await api.queryByDateRange('Bill', START, date);
+    const billVendor = new Map<string, string>();
+    const billTotal = new Map<string, number>();
+    for (const b of bills) {
+      const id = String(b.Id);
+      billVendor.set(id, b.VendorRef?.name || 'Unknown vendor');
+      billTotal.set(id, Number(b.TotalAmt) || 0);
+    }
+    // Coverage: bill-payment lines linked to a bill count at their full covered
+    // amount (cash + applied credits blended) — exactly what closes a bill.
+    const covered = new Map<string, number>();
+    for (const bp of await api.queryByDateRange('BillPayment', START, date)) {
+      for (const line of bp.Line || []) {
+        const linked = (line.LinkedTxn || []).find((t: any) => t.TxnType === 'Bill');
+        if (!linked) continue;
+        const id = String(linked.TxnId);
+        covered.set(id, (covered.get(id) || 0) + (Number(line.Amount) || 0));
+      }
+    }
+    const byVendor = new Map<string, { vendor: string; open: number; openBills: number }>();
+    let total = 0;
+    for (const [id, t] of billTotal) {
+      const open = r2(Math.max(t - (covered.get(id) || 0), 0));
+      if (open < 0.01) continue;
+      const vn = billVendor.get(id)!;
+      let v = byVendor.get(vn);
+      if (!v) { v = { vendor: vn, open: 0, openBills: 0 }; byVendor.set(vn, v); }
+      v.open = r2(v.open + open);
+      v.openBills++;
+      total = r2(total + open);
+    }
+    const vendors = [...byVendor.values()].sort((a, b) => b.open - a.open);
+    res.json({
+      asOf: date,
+      totalOpen: total,
+      vendors: vendors.slice(0, Math.max(1, Math.min(Number(req.query.top) || 25, 100))),
+      note: 'Reconstructed from bills minus payment coverage through the date. Bills fully covered later (or by credits applied later) still show open here — that is correct for a point-in-time view. Compare totalOpen to the balance-sheet A/P for the same date; small gaps = credits applied without a bill-payment record or pre-2021 history.',
+    });
+  })
+);
+
+/** Tag scan: how are bills/purchases tagged by store? Reports the distribution
+ * of QuickBooks Location (DepartmentRef) and line-level Class tags over a
+ * range, with inventory dollars per tag — read-only discovery for the
+ * per-store discount split. */
+app.get(
+  '/api/tag-scan',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const range = validDateRange(req, res);
+    if (!range) return;
+    const api = await getComputeApi();
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const invIds = new Set((await getTrackedAccounts(api)).map((t) => t.id));
+    const dist = { department: new Map<string, { txns: number; inventory: number }>(), lineClass: new Map<string, { lines: number; inventory: number }>() };
+    const bump = (m: Map<string, any>, key: string, field: string, amt = 0) => {
+      const k = key || '(untagged)';
+      let v = m.get(k);
+      if (!v) { v = { txns: 0, lines: 0, inventory: 0 }; m.set(k, v); }
+      v[field]++;
+      v.inventory += amt;
+    };
+    const scanTxns = (txns: any[], kind: string) => {
+      for (const t of txns) {
+        let invAmt = 0;
+        for (const l of t.Line || []) {
+          if (l.DetailType === 'AccountBasedExpenseLineDetail') {
+            const acct = String(l.AccountBasedExpenseLineDetail?.AccountRef?.value || '');
+            const amt = Number(l.Amount) || 0;
+            if (invIds.has(acct)) invAmt += amt;
+            bump(dist.lineClass, l.AccountBasedExpenseLineDetail?.ClassRef?.name, 'lines', invIds.has(acct) ? amt : 0);
+          }
+        }
+        bump(dist.department, t.DepartmentRef?.name, 'txns', invAmt);
+      }
+    };
+    scanTxns(await api.queryByDateRange('Bill', range.start, range.end), 'Bill');
+    const fmt = (m: Map<string, any>) =>
+      [...m.entries()].map(([tag, v]) => ({ tag, ...v, inventory: r2(v.inventory) })).sort((a, b) => b.inventory - a.inventory);
+    res.json({ start: range.start, end: range.end, billsByLocation: fmt(dist.department), billLinesByClass: fmt(dist.lineClass) });
+  })
+);
+
+/** Per-vendor early-pay discount rates: since SLC is the purchasing entity for
+ * both stores (Boise is supplied via the intercompany pipe), location accounts
+ * can't answer "which mix earns more discount" — but vendors can. For each
+ * vendor: inventory billed vs discounts posted, and the resulting rate. */
+app.get(
+  '/api/vendor-discount-rates',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const range = validDateRange(req, res);
+    if (!range) return;
+    const api = await getComputeApi();
+    const accounts = await api.listAccounts();
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const invIds = new Set((await getTrackedAccounts(api)).map((t) => t.id));
+    const discIds = new Set(
+      accounts
+        .filter((a: any) => /vendor discount|discounts\/refunds given/i.test(String(a.Name)))
+        .map((a: any) => String(a.Id))
+    );
+    type V = { vendor: string; billedInventory: number; discounts: number };
+    const byVendor = new Map<string, V>();
+    const row = (name: string) => {
+      const k = name || 'Unknown';
+      let v = byVendor.get(k);
+      if (!v) { v = { vendor: k, billedInventory: 0, discounts: 0 }; byVendor.set(k, v); }
+      return v;
+    };
+    const scan = (t: any, vendorName: string, creditSign: number) => {
+      for (const l of t.Line || []) {
+        if (l.DetailType !== 'AccountBasedExpenseLineDetail') continue;
+        const acct = String(l.AccountBasedExpenseLineDetail?.AccountRef?.value || '');
+        const a = (Number(l.Amount) || 0) * creditSign;
+        if (invIds.has(acct)) row(vendorName).billedInventory += a;
+        // benefit: negative bill line → +benefit; positive credit line → +benefit
+        else if (discIds.has(acct)) row(vendorName).discounts += -a;
+      }
+    };
+    for (const b of await api.queryByDateRange('Bill', range.start, range.end)) scan(b, b.VendorRef?.name, 1);
+    for (const vc of await api.queryByDateRange('VendorCredit', range.start, range.end)) scan(vc, vc.VendorRef?.name, -1);
+    for (const p of await api.queryByDateRange('Purchase', range.start, range.end)) {
+      scan(p, p.EntityRef?.name, p.Credit === true ? -1 : 1);
+    }
+    const rows = [...byVendor.values()]
+      .filter((v) => Math.abs(v.billedInventory) > 1000 || Math.abs(v.discounts) > 100)
+      .map((v) => ({
+        vendor: v.vendor,
+        billedInventory: r2(v.billedInventory),
+        discounts: r2(v.discounts),
+        ratePct: v.billedInventory > 0 ? r2((v.discounts / v.billedInventory) * 100) : null,
+      }))
+      .sort((a, b) => b.billedInventory - a.billedInventory);
+    const tInv = r2(rows.reduce((s, v) => s + v.billedInventory, 0));
+    const tDisc = r2(rows.reduce((s, v) => s + v.discounts, 0));
+    res.json({
+      start: range.start, end: range.end,
+      totals: { billedInventory: tInv, discounts: tDisc, blendedRatePct: tInv > 0 ? r2((tDisc / tInv) * 100) : null },
+      vendors: rows,
+    });
+  })
+);
+
+/** A/P audit: per-vendor open balances, so a negative total A/P can be traced
+ * to the specific vendors who are overpaid / carrying unapplied credits.
+ * Read-only. */
+app.get(
+  '/api/ap-audit',
+  requireAuth,
+  asyncRoute(async (_req, res) => {
+    const api = await createQboApi();
+    if (!api.listVendors || !api.queryRaw) return res.status(501).json({ error: 'vendor query unavailable' });
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const vendors = await api.listVendors();
+    const owed: any[] = [];
+    const negative: any[] = [];
+    let total = 0;
+    for (const v of vendors) {
+      const bal = Number(v.Balance) || 0;
+      if (Math.abs(bal) < 0.005) continue;
+      total += bal;
+      (bal > 0 ? owed : negative).push({ vendor: v.DisplayName || v.CompanyName, balance: r2(bal) });
+    }
+    owed.sort((a, b) => b.balance - a.balance);
+    negative.sort((a, b) => a.balance - b.balance);
+    // Open (unapplied) vendor credits, to test the "credits not yet applied" theory.
+    const credits = await api.queryRaw('VendorCredit', 'VendorCredit', []);
+    const openCredits = credits
+      .filter((c: any) => (Number(c.Balance) || 0) > 0.005)
+      .map((c: any) => ({ vendor: c.VendorRef?.name, date: c.TxnDate, open: r2(Number(c.Balance) || 0) }))
+      .sort((a: any, b: any) => b.open - a.open);
+    res.json({
+      asOf: new Date().toISOString().slice(0, 10),
+      apTotal: r2(total),
+      vendorsOwed: owed,
+      vendorsNegative: negative,
+      openVendorCredits: openCredits,
+      openVendorCreditsTotal: r2(openCredits.reduce((s: number, c: any) => s + c.open, 0)),
+    });
+  })
+);
+
+/** Credit-memo audit: are credits piling up unapplied, or moving onto bills?
+ * Pulls vendor credits (money vendors owe us, applied against their bills) and
+ * customer credit memos, splits applied vs still-open, and ages the open ones
+ * so stale credits sitting unused are visible. Read-only. */
+app.get(
+  '/api/credit-memo-audit',
+  requireAuth,
+  asyncRoute(async (_req, res) => {
+    const api = await createQboApi();
+    if (!api.queryRaw) return res.status(501).json({ error: 'raw query unavailable' });
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const today = new Date().toISOString().slice(0, 10);
+    const daysSince = (d: string) => Math.round((new Date(`${today}T00:00:00Z`).getTime() - new Date(`${d}T00:00:00Z`).getTime()) / 86_400_000);
+
+    const audit = async (table: string, respKey: string, who: (t: any) => string) => {
+      const all = await api.queryRaw!(table, respKey, []);
+      const open: any[] = [];
+      let issuedTotal = 0, openTotal = 0;
+      for (const c of all) {
+        const total = Number(c.TotalAmt) || 0;
+        const bal = Number(c.Balance) || 0; // unapplied remainder
+        issuedTotal += total;
+        if (bal > 0.005) {
+          openTotal += bal;
+          open.push({ id: String(c.Id), num: c.DocNumber || '', date: c.TxnDate || '', who: who(c), total: r2(total), openBalance: r2(bal), ageDays: daysSince(c.TxnDate) });
+        }
+      }
+      open.sort((a, b) => b.ageDays - a.ageDays);
+      const bucket = (lo: number, hi: number) => {
+        const rows = open.filter((o) => o.ageDays > lo && o.ageDays <= hi);
+        return { count: rows.length, amount: r2(rows.reduce((s, o) => s + o.openBalance, 0)) };
+      };
+      return {
+        count: all.length,
+        issuedTotal: r2(issuedTotal),
+        openCount: open.length,
+        openTotal: r2(openTotal),
+        aging: {
+          '0-30d': bucket(-1, 30),
+          '31-90d': bucket(30, 90),
+          '91-180d': bucket(90, 180),
+          'over-180d': bucket(180, 1e9),
+        },
+        oldestOpen: open.slice(0, 20),
+      };
+    };
+
+    const [vendorCredits, creditMemos] = await Promise.all([
+      audit('VendorCredit', 'VendorCredit', (t) => t.VendorRef?.name || t.VendorRef?.value || ''),
+      audit('CreditMemo', 'CreditMemo', (t) => t.CustomerRef?.name || t.CustomerRef?.value || ''),
+    ]);
+    res.json({
+      asOf: today,
+      vendorCredits,
+      creditMemos,
+      note: 'A credit is "moving" when its open balance is 0 (fully applied to a bill/invoice). Credits with an open balance and a large age are sitting unused. VendorCredit = money a vendor owes us, applied against their bills (this is the rebate pipeline). CreditMemo = customer-side credits.',
+    });
+  })
+);
+
+/** Outflow audit: every dollar leaving the real bank accounts, classified by
+ * the account it's ultimately coded to, so we can prove that money going out
+ * is EITHER a real cost/expense (shows on the P&L) OR a legitimate non-expense
+ * use (owner draw, tax, capex, debt paydown, internal transfer) — and surface
+ * anything that's neither (a possible hole where profit would be overstated).
+ * Read-only. */
+app.get(
+  '/api/outflow-audit',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const range = validDateRange(req, res);
+    if (!range) return;
+    const result = await dedupe(`oa:${range.start}:${range.end}`, async () => {
+      const api = await getComputeApi();
+      const accounts = await api.listAccounts();
+      const typeById = new Map(accounts.map((a: any) => [String(a.Id), String(a.AccountType)]));
+      const nameById = new Map(accounts.map((a: any) => [String(a.Id), String(a.Name)]));
+      const inventoryIds = new Set((await getTrackedAccounts(api)).map((t) => t.id));
+      // Payroll-type expense accounts: paid via the payroll service (wages,
+      // invisible) or bank tax deposits — tracked separately so the expense
+      // decomposition doesn't double-count them against bank/card payments.
+      const payrollRe = /payroll|wage|salar|casual labor|officer|fica|futa|suta|unemploy|medicare|social security/i;
+      const payrollAcctIds = new Set(
+        accounts.filter((a: any) => (String(a.AccountType) === 'Expense' || String(a.AccountType) === 'Other Expense') && payrollRe.test(String(a.Name))).map((a: any) => String(a.Id))
+      );
+      let bankExpNonPayroll = 0, cardExpNonPayroll = 0, priorPeriodExpenseCash = 0;
+      // Per-account expense payments (non-payroll), to compare against the P&L
+      // row for that account and locate exactly where cash paid ≠ booked expense.
+      const expensePayByAcct = new Map<string, number>();
+      const trackExpensePay = (acctId: any, amt: number) => {
+        const id = String(acctId);
+        expensePayByAcct.set(id, (expensePayByAcct.get(id) || 0) + amt);
+      };
+      // Our real cash pool: Zions checking + the two savings, plus the ACH
+      // clearing account (money in transit that is still ours).
+      const REAL_BANK = /zions|xions/i;
+      const poolIds = new Set<string>();
+      for (const a of accounts) {
+        if (String(a.AccountType) === 'Bank' && REAL_BANK.test(String(a.Name))) poolIds.add(String(a.Id));
+      }
+      const achId = accounts.find((a: any) => a.Name === 'ACH')?.Id;
+      if (achId) poolIds.add(String(achId));
+
+      // Bucket every coded dollar by what kind of account it lands in.
+      const COST = 'cost';
+      const classify = (acctId: string): { key: string; label: string; isCost: boolean } => {
+        const id = String(acctId);
+        const type = typeById.get(id) || '';
+        const name = (nameById.get(id) || '').toLowerCase();
+        if (inventoryIds.has(id) || type === 'Cost of Goods Sold') return { key: 'cogs', label: 'Inventory / cost of goods sold', isCost: true };
+        if (type === 'Expense' || type === 'Other Expense') return { key: 'expenses', label: 'Operating expenses', isCost: true };
+        if (type === 'Income' || type === 'Other Income') return { key: 'refunds', label: 'Customer refunds (reduces income)', isCost: true };
+        if (type === 'Fixed Asset') return { key: 'capex', label: 'Capital assets (equipment, buildout)', isCost: false };
+        if (type === 'Equity') return { key: 'owners', label: 'Owner distributions / dividends', isCost: false };
+        if (/1040-es|estimated tax/.test(name)) return { key: 'ownertax', label: 'Owner estimated taxes (1040-ES)', isCost: false };
+        if (type === 'Credit Card') return { key: 'cards', label: 'Credit-card paydown', isCost: false };
+        if (type === 'Bank' && poolIds.has(id)) return { key: 'internal', label: 'Transfer between your own accounts', isCost: false };
+        if (type === 'Bank') return { key: 'holding', label: 'Transfer to holding accounts (Cash on Hand, etc.)', isCost: false };
+        if (/liability|payable/.test(type.toLowerCase())) return { key: 'liabilities', label: 'Loan / payroll-tax / liability paydown', isCost: false };
+        if (/asset|receivable/.test(type.toLowerCase())) return { key: 'assets', label: 'Other assets (prepaid, employee loans)', isCost: false };
+        return { key: 'unclassified', label: 'Unclassified — NEEDS REVIEW', isCost: false };
+      };
+      const buckets = new Map<string, { key: string; label: string; isCost: boolean; total: number; samples: any[] }>();
+      const add = (acctId: string, amount: number, sample?: any) => {
+        if (Math.abs(amount) < 0.005) return;
+        const c = classify(acctId);
+        let b = buckets.get(c.key);
+        if (!b) { b = { key: c.key, label: c.label, isCost: c.isCost, total: 0, samples: [] }; buckets.set(c.key, b); }
+        b.total = Math.round((b.total + amount) * 100) / 100;
+        if (sample && b.samples.length < 8) b.samples.push({ ...sample, coded: nameById.get(String(acctId)) });
+      };
+
+      const inPool = (ref: any) => ref?.value && poolIds.has(String(ref.value));
+
+      // Operating expenses paid by CREDIT CARD land on the P&L but never touch
+      // the bank pool — the card pays, then the card gets paid down later (which
+      // shows in the non-cost "credit-card paydown" bucket). Measure them so the
+      // P&L expense total reconciles.
+      const cardTypeIds = new Set(accounts.filter((a: any) => String(a.AccountType) === 'Credit Card').map((a: any) => String(a.Id)));
+      const isExpenseAcct = (acctId: any) => {
+        const t = typeById.get(String(acctId)) || '';
+        return t === 'Expense' || t === 'Other Expense';
+      };
+      let cardPaidExpenses = 0;
+      const allPurchases = await api.queryByDateRange('Purchase', range.start, range.end);
+
+      // Direct purchases funded from the pool: split by each line's coded account.
+      for (const p of allPurchases) {
+        const sign = p.Credit === true ? -1 : 1;
+        if (cardTypeIds.has(String(p.AccountRef?.value))) {
+          for (const line of p.Line || []) {
+            const acct = line.AccountBasedExpenseLineDetail?.AccountRef?.value;
+            if (line.DetailType === 'AccountBasedExpenseLineDetail' && isExpenseAcct(acct)) {
+              cardPaidExpenses += sign * (Number(line.Amount) || 0);
+              if (!payrollAcctIds.has(String(acct))) { cardExpNonPayroll += sign * (Number(line.Amount) || 0); trackExpensePay(acct, sign * (Number(line.Amount) || 0)); }
+            }
+          }
+          continue;
+        }
+        if (!inPool(p.AccountRef)) continue;
+        let lined = 0;
+        for (const line of p.Line || []) {
+          const amt = sign * (Number(line.Amount) || 0);
+          if (line.DetailType === 'AccountBasedExpenseLineDetail') {
+            const acct = line.AccountBasedExpenseLineDetail?.AccountRef?.value;
+            add(acct, amt, { date: p.TxnDate, who: p.EntityRef?.name, amount: amt, id: p.Id, type: 'Purchase' });
+            if (isExpenseAcct(acct) && !payrollAcctIds.has(String(acct))) { bankExpNonPayroll += amt; trackExpensePay(acct, amt); }
+            lined += Number(line.Amount) || 0;
+          } else if (line.DetailType === 'ItemBasedExpenseLineDetail') {
+            add([...inventoryIds][0] || 'cogs', amt, { date: p.TxnDate, who: p.EntityRef?.name, amount: amt, id: p.Id, type: 'Purchase(item)' });
+            lined += Number(line.Amount) || 0;
+          }
+        }
+        const rest = sign * (Number(p.TotalAmt) || 0) - sign * lined;
+        if (Math.abs(rest) > 0.02) add('unclassified', rest, { date: p.TxnDate, who: p.EntityRef?.name, amount: rest, id: p.Id, type: 'Purchase(unlined)' });
+      }
+      cardPaidExpenses = Math.round(cardPaidExpenses * 100) / 100;
+
+      // Bill payments funded from the pool: distribute the cash paid across the
+      // paid bill's line accounts (that's what the money was really for).
+      const billPayments = await api.queryByDateRange('BillPayment', range.start, range.end);
+      const billIds = new Set<string>();
+      for (const bp of billPayments) {
+        const fund = bp.CheckPayment?.BankAccountRef;
+        if (!inPool(fund)) continue;
+        for (const line of bp.Line || []) {
+          const b = (line.LinkedTxn || []).find((t: any) => t.TxnType === 'Bill');
+          if (b?.TxnId) billIds.add(String(b.TxnId));
+        }
+      }
+      const bills = api.getBills ? await api.getBills([...billIds]) : [];
+      const billById = new Map(bills.map((b: any) => [String(b.Id), b]));
+      for (const bp of billPayments) {
+        const fund = bp.CheckPayment?.BankAccountRef;
+        if (!inPool(fund)) continue;
+        const cash = Number(bp.TotalAmt) || 0;
+        if (cash === 0) continue;
+        // QBO writes each bill line at the bill's FULL covered amount (cash +
+        // applied vendor credits blended). Only TotalAmt is real cash — scale
+        // every attribution by the cash fraction so credits don't leak in as
+        // phantom outflow (the D33 fix, applied here too).
+        let coverage = 0;
+        for (const line of bp.Line || []) {
+          const linked: any[] = line.LinkedTxn || [];
+          if (linked.some((t) => t.TxnType === 'VendorCredit')) continue;
+          if (linked.some((t) => t.TxnType === 'Bill')) coverage += Number(line.Amount) || 0;
+        }
+        const cashFraction = coverage > 0 ? Math.max(0, Math.min(cash / coverage, 1)) : 1;
+        let attributed = 0;
+        for (const line of bp.Line || []) {
+          const linked: any[] = line.LinkedTxn || [];
+          if (linked.some((t) => t.TxnType === 'VendorCredit')) continue;
+          const linkedBill = linked.find((t) => t.TxnType === 'Bill');
+          if (!linkedBill) continue;
+          const bill = billById.get(String(linkedBill.TxnId));
+          const lineCash = (Number(line.Amount) || 0) * cashFraction;
+          if (!bill) { add('unclassified', lineCash, { date: bp.TxnDate, who: bp.VendorRef?.name, amount: lineCash, id: bp.Id, type: 'BillPayment(bill missing)' }); attributed += lineCash; continue; }
+          const charges = positiveLineTotal(bill) || (Number(bill.TotalAmt) || 0);
+          if (charges <= 0) continue;
+          for (const bl of bill.Line || []) {
+            const blAmt = Number(bl.Amount) || 0;
+            if (blAmt <= 0) continue;
+            const portion = (blAmt / charges) * lineCash;
+            if (bl.DetailType === 'AccountBasedExpenseLineDetail') {
+              const acct = bl.AccountBasedExpenseLineDetail?.AccountRef?.value;
+              add(acct, portion, { date: bp.TxnDate, who: bp.VendorRef?.name, amount: portion, id: bp.Id, type: 'BillPayment' });
+              if (isExpenseAcct(acct) && !payrollAcctIds.has(String(acct))) {
+                bankExpNonPayroll += portion;
+                trackExpensePay(acct, portion);
+                // Cash paid THIS period toward a bill whose expense was booked in
+                // a PRIOR period — the timing that makes the leftover negative.
+                if ((bill.TxnDate || '') < range.start) priorPeriodExpenseCash += portion;
+              }
+            } else add([...inventoryIds][0] || 'cogs', portion, { date: bp.TxnDate, who: bp.VendorRef?.name, amount: portion, id: bp.Id, type: 'BillPayment(item)' });
+            attributed += portion;
+          }
+        }
+        const rest = cash - attributed;
+        if (Math.abs(rest) > 0.02) add('unclassified', rest, { date: bp.TxnDate, who: bp.VendorRef?.name, amount: rest, id: bp.Id, type: 'BillPayment(residual)' });
+      }
+
+      // Card paydowns funded from the pool.
+      for (const ccp of await api.queryByDateRange('CreditCardPayment', range.start, range.end)) {
+        if (inPool(ccp.BankAccountRef)) add(ccp.CreditCardAccountRef?.value || 'cards', Number(ccp.Amount) || 0, { date: ccp.TxnDate, who: ccp.CreditCardAccountRef?.name, amount: Number(ccp.Amount) || 0, id: ccp.Id, type: 'CardPayment' });
+      }
+      // Explicit transfers out of the pool.
+      for (const t of await api.queryByDateRange('Transfer', range.start, range.end)) {
+        const from = inPool(t.FromAccountRef), to = inPool(t.ToAccountRef);
+        if (from && !to) add(t.ToAccountRef?.value, Number(t.Amount) || 0, { date: t.TxnDate, who: t.ToAccountRef?.name, amount: Number(t.Amount) || 0, id: t.Id, type: 'Transfer' });
+      }
+
+      const cats = [...buckets.values()].sort((a, b) => b.total - a.total);
+      const costOut = Math.round(cats.filter((c) => c.isCost).reduce((s, c) => s + c.total, 0) * 100) / 100;
+      const nonCostOut = Math.round(cats.filter((c) => !c.isCost && c.key !== 'unclassified').reduce((s, c) => s + c.total, 0) * 100) / 100;
+      const unclassified = Math.round((buckets.get('unclassified')?.total || 0) * 100) / 100;
+      const categorizedOut = Math.round((costOut + nonCostOut + unclassified) * 100) / 100;
+
+      // The P&L side, to compare the cost portion against.
+      const stmt: any = await getStatement(range, false);
+      const plCogs = stmt.adjusted ? stmt.adjusted.cogsTotal : stmt.cogs?.total;
+      const plExpenses = stmt.expenses?.net;
+      const r2 = (n: number) => Math.round(n * 100) / 100;
+      const cashInventory = buckets.get('cogs')?.total || 0;
+      const cashExpenses = buckets.get('expenses')?.total || 0;
+      const expenseInvisible = r2((plExpenses || 0) - cashExpenses);
+      // Additive decomposition of the P&L operating-expense total (GROSS, before
+      // reimbursements) by how each dollar was paid — no double-counting:
+      // payroll rows come from the P&L; everything else is split into the
+      // bank/card cash that paid it, with the leftover being expenses still
+      // sitting on unpaid bills (accrued, no cash yet) plus period timing.
+      const grossExpenses = stmt.expenses?.totalFromBooks ?? plExpenses;
+      const reimbursements = stmt.expenses?.reimbursements ?? 0;
+      const payrollAndTaxes = r2((stmt.expenses?.rows || []).filter((row: any) => payrollRe.test(row.name)).reduce((s: number, row: any) => s + row.amount, 0));
+      const nonPayrollExpenses = r2((grossExpenses || 0) - payrollAndTaxes);
+      const nonPayrollByBank = r2(bankExpNonPayroll);
+      const nonPayrollByCard = r2(cardExpNonPayroll);
+      const nonPayrollUnpaidOrTiming = r2(nonPayrollExpenses - nonPayrollByBank - nonPayrollByCard);
+      // Where cash-paid ≠ booked expense, account by account. Positive diff =
+      // booked more than paid (unpaid/accrued — normal). Negative = paid more
+      // than booked (this is what makes the leftover negative — find the source).
+      const pnlRowById = new Map<string, number>();
+      for (const row of stmt.expenses?.rows || []) if (row.id && !payrollRe.test(row.name)) pnlRowById.set(String(row.id), (pnlRowById.get(String(row.id)) || 0) + row.amount);
+      const acctDivergence: any[] = [];
+      const allExpAcctIds = new Set([...expensePayByAcct.keys(), ...pnlRowById.keys()]);
+      for (const id of allExpAcctIds) {
+        const booked = r2(pnlRowById.get(id) || 0);
+        const paid = r2(expensePayByAcct.get(id) || 0);
+        const diff = r2(booked - paid);
+        if (Math.abs(diff) > 500) acctDivergence.push({ account: nameById.get(id) || id, booked, paidByBankOrCard: paid, diff });
+      }
+      acctDivergence.sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
+
+      return {
+        start: range.start,
+        end: range.end,
+        pool: [...poolIds].map((id) => nameById.get(id)).filter(Boolean),
+        categorizedOut,
+        costOut,
+        nonCostOut,
+        unclassified,
+        categories: cats,
+        reconciliation: {
+          verdict:
+            Math.abs(unclassified) < 1000
+              ? 'CLEAN — every visible dollar leaving the bank is classified; nothing unexplained. Profit is not overstated by hidden outflow.'
+              : `REVIEW — $${Math.abs(unclassified).toFixed(2)} of outflow could not be classified; inspect the "unclassified" bucket.`,
+          cashInventoryOut: r2(cashInventory),
+          pnlCogs: plCogs,
+          inventoryTimingGap: r2(cashInventory - (plCogs || 0)),
+          cashExpensesOut: r2(cashExpenses),
+          pnlOperatingExpenses: plExpenses,
+          expenseInvisible,
+          // Additive decomposition of GROSS P&L operating expenses.
+          expenseBreakdown: {
+            grossOperatingExpenses: r2(grossExpenses || 0),
+            payrollAndTaxes,
+            nonPayrollExpenses,
+            nonPayrollByBank,
+            nonPayrollByCard,
+            nonPayrollUnpaidOrTiming,
+            priorPeriodBillCash: r2(priorPeriodExpenseCash),
+            reimbursements: r2(reimbursements),
+            accountDivergence: acctDivergence.slice(0, 15),
+            note: 'GROSS operating expenses = payroll & taxes (paid via the payroll service + bank tax deposits) + all other expenses. The "other" expenses are split into what the bank paid, what the credit cards paid, and what is still on unpaid bills or is period timing. These add up exactly. A NEGATIVE timing line means bank+card paid MORE than this year\'s booked expense — because $' + r2(priorPeriodExpenseCash).toLocaleString() + ' of that cash paid off bills whose expense was booked in a PRIOR year. That is the opposite of a missing expense: a missing expense would show cash coded to a NON-expense account (caught in the other outflow buckets, all of which are named and reconciled), or unrecorded cash (would show as unclassified — which is $0).',
+          },
+          notes: [
+            'Cash inventory out ≈ P&L COGS; the difference is inventory timing (cash buys stock now, it becomes COGS only when sold).',
+            `Cash operating-expense out ($${r2(cashExpenses).toLocaleString()}) is far below P&L operating expenses ($${(plExpenses || 0).toLocaleString()}) because ~$${expenseInvisible.toLocaleString()} of expense — mostly PAYROLL — leaves the bank with NO QuickBooks transaction (paychecks + tax-center are processed outside QBO). That money still appears as an expense on the accrual P&L, so it is fully counted and does NOT overstate profit.`,
+            'Non-cost outflow (transfers, card/loan paydown, owner draws, taxes, capex) is correctly absent from the P&L — paying those down is not an expense.',
+          ],
+        },
+      };
+    });
+    res.json(result);
+  })
+);
+
+/** Net register movement for an account over a range, measured from mirrored
+ * transactions (same math as /api/register-history): positive = owed grew.
+ * Used where the books' balance level is broken but the period's movement is
+ * verified accurate (the 2025+ card registers, post 2026-07-17 repair). */
+async function registerMovement(api: QboApi, accountId: string, start: string, end: string): Promise<number> {
+  const id = String(accountId);
+  let net = 0;
+  for (const p of await api.queryByDateRange('Purchase', start, end)) {
+    const sign = p.Credit === true ? -1 : 1;
+    if (String(p.AccountRef?.value) === id) net += sign * (Number(p.TotalAmt) || 0);
+    for (const line of p.Line || []) {
+      if (line.DetailType === 'AccountBasedExpenseLineDetail' && String(line.AccountBasedExpenseLineDetail?.AccountRef?.value) === id)
+        net -= sign * (Number(line.Amount) || 0);
+    }
+  }
+  for (const bp of await api.queryByDateRange('BillPayment', start, end)) {
+    if (String(bp.CreditCardPayment?.CCAccountRef?.value) === id) net += Number(bp.TotalAmt) || 0;
+  }
+  for (const ccp of await api.queryByDateRange('CreditCardPayment', start, end)) {
+    if (String(ccp.CreditCardAccountRef?.value) === id) net -= Number(ccp.Amount) || 0;
+    if (String(ccp.BankAccountRef?.value) === id) net += Number(ccp.Amount) || 0;
+  }
+  for (const je of await api.queryByDateRange('JournalEntry', start, end)) {
+    for (const l of je.Line || []) {
+      const d = l.JournalEntryLineDetail;
+      if (d && String(d.AccountRef?.value) === id) net += (d.PostingType === 'Credit' ? 1 : -1) * (Number(l.Amount) || 0);
+    }
+  }
+  for (const dep of await api.queryByDateRange('Deposit', start, end)) {
+    for (const line of dep.Line || []) {
+      // A deposit whose source line is coded to a credit card is money coming
+      // BACK from the card issuer — a returned/refunded payment or chargeback —
+      // which RAISES what's owed (it reverses a paydown). E.g. the July 2026
+      // Amex autopay that bounced and Amex redeposited $76,640.30. (These are
+      // liability accounts, so a credit to them increases the balance.)
+      if (String(line.DepositLineDetail?.AccountRef?.value) === id) net += Number(line.Amount) || 0;
+    }
+  }
+  return Math.round(net * 100) / 100;
+}
+
+/** Twin-matcher for double-recorded card paydowns: pairs each dedicated
+ * pay-down-card transaction (CreditCardPayment) with the bank-side Purchase
+ * coded to the same card for the same money. Read-only diagnostic — produces
+ * the worklist, changes nothing in QuickBooks. */
+app.get(
+  '/api/card-dupe-match',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const accountId = String(req.query.account || '');
+    if (!accountId) return res.status(400).json({ error: 'Provide ?account=<cardAccountId>' });
+    const start = String(req.query.start || '2020-01-01');
+    const end = String(req.query.end || new Date().toISOString().slice(0, 10));
+    const api = await getComputeApi();
+
+    type Side = { id: string; date: string; amount: number; who: string; memo: string; matched?: boolean };
+    const ccps: Side[] = [];
+    for (const ccp of await api.queryByDateRange('CreditCardPayment', start, end)) {
+      if (String(ccp.CreditCardAccountRef?.value) !== accountId) continue;
+      ccps.push({
+        id: String(ccp.Id),
+        date: ccp.TxnDate || '',
+        amount: Math.round((Number(ccp.Amount) || 0) * 100) / 100,
+        who: ccp.BankAccountRef?.name || '',
+        memo: ccp.PrivateNote || '',
+      });
+    }
+    const purchases: Side[] = [];
+    for (const p of await api.queryByDateRange('Purchase', start, end)) {
+      if (String(p.AccountRef?.value) === accountId) continue; // the card's own charges, not paydowns
+      if (p.Credit === true) continue;
+      let coded = 0;
+      for (const line of p.Line || []) {
+        if (
+          line.DetailType === 'AccountBasedExpenseLineDetail' &&
+          String(line.AccountBasedExpenseLineDetail?.AccountRef?.value) === accountId
+        )
+          coded += Number(line.Amount) || 0;
+      }
+      if (coded <= 0.005) continue;
+      purchases.push({
+        id: String(p.Id),
+        date: p.TxnDate || '',
+        amount: Math.round(coded * 100) / 100,
+        who: p.AccountRef?.name || '',
+        memo: [p.EntityRef?.name, p.PrivateNote].filter(Boolean).join(' — '),
+      });
+    }
+
+    const dayDiff = (a: string, b: string) =>
+      Math.abs((new Date(`${a}T00:00:00Z`).getTime() - new Date(`${b}T00:00:00Z`).getTime()) / 86400000);
+    // Tightest pass first so each transaction pairs with its nearest twin;
+    // later passes only see what earlier passes left unmatched.
+    const passes = [
+      { grade: 'A', amountTol: 0.01, days: 3 },
+      { grade: 'B', amountTol: 0.01, days: 14 },
+      { grade: 'C', amountTol: 1.0, days: 14 },
+      { grade: 'D', amountTol: 0.01, days: 45 },
+    ];
+    const pairs: any[] = [];
+    for (const pass of passes) {
+      const cands: { c: Side; p: Side; dd: number }[] = [];
+      for (const c of ccps) {
+        if (c.matched) continue;
+        for (const p of purchases) {
+          if (p.matched) continue;
+          if (Math.abs(c.amount - p.amount) > pass.amountTol) continue;
+          const dd = dayDiff(c.date, p.date);
+          if (dd > pass.days) continue;
+          cands.push({ c, p, dd });
+        }
+      }
+      cands.sort((x, y) => x.dd - y.dd || Math.abs(x.c.amount - x.p.amount) - Math.abs(y.c.amount - y.p.amount));
+      for (const cand of cands) {
+        if (cand.c.matched || cand.p.matched) continue;
+        cand.c.matched = cand.p.matched = true;
+        pairs.push({ grade: pass.grade, daysApart: cand.dd, amount: cand.c.amount, ccp: cand.c, purchase: cand.p });
+      }
+    }
+    const sum = (rows: Side[]) => Math.round(rows.reduce((s, r) => s + r.amount, 0) * 100) / 100;
+    const strip = ({ matched, ...rest }: Side) => rest;
+    res.json({
+      account: accountId,
+      start,
+      end,
+      pairs: pairs.map((pr) => ({ ...pr, ccp: strip(pr.ccp), purchase: strip(pr.purchase) })),
+      unmatchedCcps: ccps.filter((c) => !c.matched).map(strip),
+      unmatchedPurchases: purchases.filter((p) => !p.matched).map(strip),
+      totals: {
+        ccpCount: ccps.length,
+        ccpTotal: sum(ccps),
+        purchaseCount: purchases.length,
+        purchaseTotal: sum(purchases),
+        pairCount: pairs.length,
+        pairedTotal: Math.round(pairs.reduce((s, p) => s + p.amount, 0) * 100) / 100,
+        unmatchedCcpTotal: sum(ccps.filter((c) => !c.matched)),
+        unmatchedPurchaseTotal: sum(purchases.filter((p) => !p.matched)),
+      },
+    });
+  })
+);
+
+/** Accounts-Receivable audit: what actually makes up the A/R balance, split
+ * into real customer receivables, the Boise intercompany line, and "customers"
+ * that are really vendors (Canon etc.) the accountant invoices to track credit
+ * memos owed to us. Read-only. */
+app.get(
+  '/api/ar-audit',
+  requireAuth,
+  asyncRoute(async (_req, res) => {
+    const api = await createQboApi();
+    if (!api.queryRaw) return res.status(501).json({ error: 'raw query unavailable' });
+    // Every open invoice (a positive balance is money still owed on it).
+    const invoices = await api.queryRaw('Invoice', 'Invoice', [{ field: 'Balance', operator: '>', value: '0' }]);
+    const vendors = api.listVendors ? await api.listVendors() : [];
+    const norm = (s: string) => String(s || '').trim().toLowerCase();
+    // Strip corporate suffixes/punctuation so "ASI Corp." matches vendor "ASI".
+    const bare = (s: string) => norm(s).replace(/[.,]/g, '').replace(/\b(inc|corp|corporation|co|llc|ltd|usa|inc|north america|na)\b/g, '').replace(/\s+/g, ' ').trim();
+    const vendorBare = new Set(vendors.map((v: any) => bare(v.DisplayName || v.CompanyName || '')).filter(Boolean));
+
+    const BOISE = /boise/i;
+    const VENDORISH = /\b(canon|sony|nikon|fuji|fujifilm|sigma|tamron|panasonic|olympus|om digital|manfrotto|profoto|dji|gopro|synnex|ingram|sandisk|tenba|wacom|blackmagic|zeiss|leica|godox|rode|sennheiser|lowepro|peak design|promaster|westcott|macgroup|slik|aputure|amgreat|asi)\b/i;
+
+    type Row = { customer: string; balance: number; count: number; alsoVendor: boolean; samples: string[]; docs: { id: string; num: string; date: string; balance: number; total: number }[] };
+    const byCustomer = new Map<string, Row>();
+    for (const inv of invoices) {
+      const name = inv.CustomerRef?.name || inv.CustomerRef?.value || 'Unknown';
+      const key = norm(name);
+      let row = byCustomer.get(key);
+      if (!row) { row = { customer: name, balance: 0, count: 0, alsoVendor: vendorBare.has(bare(name)), samples: [], docs: [] }; byCustomer.set(key, row); }
+      const bal = Number(inv.Balance) || 0;
+      row.balance = Math.round((row.balance + bal) * 100) / 100;
+      row.count++;
+      // Capture a few line descriptions / item names so we can SEE what the
+      // invoice is for (a rebate/co-op memo vs a real product sale).
+      for (const l of inv.Line || []) {
+        const desc = l.Description || l.SalesItemLineDetail?.ItemRef?.name || '';
+        if (desc && row.samples.length < 4 && !row.samples.includes(desc)) row.samples.push(String(desc).slice(0, 80));
+      }
+      row.docs.push({ id: String(inv.Id), num: inv.DocNumber || '', date: inv.TxnDate || '', balance: bal, total: Number(inv.TotalAmt) || 0 });
+    }
+
+    const classify = (row: Row): 'boise' | 'vendor' | 'customer' => {
+      if (BOISE.test(row.customer)) return 'boise';
+      if (row.alsoVendor || VENDORISH.test(row.customer)) return 'vendor';
+      return 'customer';
+    };
+    const groups: Record<string, { total: number; customers: Row[] }> = {
+      boise: { total: 0, customers: [] },
+      vendor: { total: 0, customers: [] },
+      customer: { total: 0, customers: [] },
+    };
+    for (const row of byCustomer.values()) {
+      const g = groups[classify(row)];
+      g.customers.push(row);
+      g.total = Math.round((g.total + row.balance) * 100) / 100;
+    }
+    for (const g of Object.values(groups)) g.customers.sort((a, b) => b.balance - a.balance);
+
+    const grand = Math.round(Object.values(groups).reduce((s, g) => s + g.total, 0) * 100) / 100;
+    res.json({
+      asOf: new Date().toISOString().slice(0, 10),
+      openInvoices: invoices.length,
+      arTotal: grand,
+      summary: {
+        realCustomers: groups.customer.total,
+        boiseIntercompany: groups.boise.total,
+        vendorCreditTrackers: groups.vendor.total,
+      },
+      groups,
+    });
+  })
+);
+
+/** Raw mirrored view of a single Purchase, for audit drill-downs where the
+ * aggregate reports aren't enough to see a transaction's line structure. */
+app.get(
+  '/api/txn-raw',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const id = String(req.query.id || '');
+    if (!id) return res.status(400).json({ error: 'Provide ?id=<purchaseId>' });
+    const api = await getComputeApi();
+    if (!api.getPurchase) return res.status(501).json({ error: 'Purchase lookup unavailable' });
+    res.json(await api.getPurchase(id));
+  })
+);
+
+/** Transactions behind one line of the bank report — same predicates as the
+ * report itself, so every drawer sums to its line. */
+app.get(
+  '/api/bank-flow-detail',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const range = validRange(req, res);
+    if (!range) return;
+    const line = String(req.query.line || '');
+    const startDate = monthDateRange(range.start).start;
+    const endDate = monthDateRange(range.end).end;
+    const result = await dedupe(`dt:bf:${line}:${startDate}:${endDate}`, async () => {
+      const api = await getComputeApi();
+      const banks = await getBankAccounts(api);
+      return bankFlowDetail(api, banks.map((b) => b.id), line, startDate, endDate);
+    });
+    res.json({ line, ...result });
+  })
+);
+
 /** Balance-sheet diff over the range: bank change + where the cash went. */
 app.get(
   '/api/cash-flow',
@@ -659,7 +1943,11 @@ app.get(
     if (req.query.refresh !== '1') {
       const cached = await getCachedMonth(cacheKey);
       const endIsClosed = range.end < currentMonthUtc();
-      if (cached && (endIsClosed || Date.now() - new Date(cached.computedAt).getTime() < CURRENT_MONTH_CACHE_TTL_MS)) {
+      if (
+        cached &&
+        (endIsClosed || Date.now() - new Date(cached.computedAt).getTime() < CURRENT_MONTH_CACHE_TTL_MS) &&
+        !(await mirrorChangedSince(asOfStart, asOfEnd, new Date(cached.computedAt)))
+      ) {
         return res.json(cached.data);
       }
     }
@@ -687,7 +1975,11 @@ app.get(
     if (req.query.refresh !== '1') {
       const cached = await getCachedMonth(cacheKey);
       const endIsClosed = range.end < currentMonthUtc();
-      if (cached && (endIsClosed || Date.now() - new Date(cached.computedAt).getTime() < CURRENT_MONTH_CACHE_TTL_MS)) {
+      if (
+        cached &&
+        (endIsClosed || Date.now() - new Date(cached.computedAt).getTime() < CURRENT_MONTH_CACHE_TTL_MS) &&
+        !(await mirrorChangedSince(startDate, endDate, new Date(cached.computedAt)))
+      ) {
         return res.json(cached.data);
       }
     }
@@ -878,7 +2170,7 @@ app.post(
       [asOf, value, req.body?.note || null]
     );
     // Adjusted statements depend on counts — drop cached statements.
-    await getPool().query(`DELETE FROM monthly_cache WHERE month LIKE 'stmt:%'`);
+    await getPool().query(`DELETE FROM monthly_cache WHERE month LIKE '%stmt%'`);
     res.json({ ok: true });
   })
 );
@@ -890,7 +2182,7 @@ app.delete(
     const asOf = String(req.query.asOf || '');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(asOf)) return res.status(400).json({ error: 'Provide ?asOf=YYYY-MM-DD' });
     await getPool().query(`DELETE FROM inventory_counts WHERE as_of = $1`, [asOf]);
-    await getPool().query(`DELETE FROM monthly_cache WHERE month LIKE 'stmt:%'`);
+    await getPool().query(`DELETE FROM monthly_cache WHERE month LIKE '%stmt%'`);
     res.json({ ok: true });
   })
 );
@@ -920,22 +2212,32 @@ async function getPnlCtx(api: QboApi): Promise<PnlContext & { accountNames: Map<
  * section pulled from the books' accrual P&L for the same period. Cached like
  * the other range endpoints; also the data source for /api/checks. */
 async function getStatement(range: { start: string; end: string }, force: boolean): Promise<any> {
-  const cacheKey = `stmt:${range.start}:${range.end}`;
+  const { opts: spendOpts, cachePrefix } = await getSpendOpts(await getComputeApi());
+  const cacheKey = `${cachePrefix}stmt5:${range.start}:${range.end}`;
   if (!force) {
     const cached = await getCachedMonth(cacheKey);
     const closed = range.end < new Date().toISOString().slice(0, 10);
-    if (cached && (closed || Date.now() - new Date(cached.computedAt).getTime() < CURRENT_MONTH_CACHE_TTL_MS)) {
+    if (
+      cached &&
+      (closed || Date.now() - new Date(cached.computedAt).getTime() < CURRENT_MONTH_CACHE_TTL_MS) &&
+      !(await mirrorChangedSince(range.start, range.end, new Date(cached.computedAt)))
+    ) {
       return cached.data;
     }
+  } else {
+    // Refresh means "get the latest from QuickBooks", not just recompute:
+    // pull edits into the mirror first so a hand-recategorized transaction
+    // shows up immediately instead of after the next scheduled sync.
+    try { await runSync(false); } catch { /* recompute from the current mirror */ }
   }
   return dedupe(cacheKey, async () => {
       const api = await getComputeApi();
       const inventoryIds = (await getTrackedAccounts(api)).map((t) => t.id);
-      const spend = await computeMonthlySpend(api, inventoryIds, range);
+      const spend = await computeMonthlySpend(api, inventoryIds, range, spendOpts);
       const taxIds = (await getSalesTaxAccounts(api)).map((t) => t.id);
-      const taxRemitted = taxIds.length ? (await computeMonthlySpend(api, taxIds, range)).total : 0;
+      const taxRemitted = taxIds.length ? (await computeMonthlySpend(api, taxIds, range, spendOpts)).total : 0;
       const directIds = (await getDirectCostAccounts(api)).map((t) => t.id);
-      const directCosts = directIds.length ? (await computeMonthlySpend(api, directIds, range)).total : 0;
+      const directCosts = directIds.length ? (await computeMonthlySpend(api, directIds, range, spendOpts)).total : 0;
       const pnl = await computeMonthlyPnl(
         api,
         await getPnlCtx(api),
@@ -944,6 +2246,8 @@ async function getStatement(range: { start: string; end: string }, force: boolea
         taxRemitted,
         directCosts
       );
+      // Surface the funding-account exclusion on the statement itself.
+      for (const w of spend.warnings) if (w.startsWith('Excluded $')) pnl.warnings.push(w);
       // Operating expenses come from the books' accrual P&L for the same period.
       // Row ids (when the report provides them) let the UI drill into an account.
       let expenses: { total: number; rows: { name: string; amount: number; id: string | null }[] } = { total: 0, rows: [] };
@@ -998,6 +2302,10 @@ async function getStatement(range: { start: string; end: string }, force: boolea
           );
         }
         const inventoryChange = r2(endCount.value - beginCount.value);
+        // Purchases = cash actually paid for bills, on the day it was paid
+        // (Chris, 2026-07-17: "count what we paid for the bill… the cost
+        // should go on January 2nd not the 30th"). Credits never count —
+        // bucket 1 scales every payment line by its cash fraction.
         const adjustedCogsTotal = r2(pnl.cogs - inventoryChange + pnl.directCosts - pnl.cogsOffsets);
         const adjustedGp = r2(pnl.revenueNet - adjustedCogsTotal);
         adjusted = {
@@ -1021,6 +2329,7 @@ async function getStatement(range: { start: string; end: string }, force: boolea
           invoicePayments: pnl.retailCashIn.invoicePayments,
           salesReceipts: pnl.retailCashIn.salesReceipts,
           refunds: pnl.retailCashIn.refunds,
+          feedRefunds: pnl.retailCashIn.feedRefunds,
           salesTaxRemitted: pnl.salesTaxRemitted,
           netRevenue: pnl.revenueNet,
         },
@@ -1059,6 +2368,36 @@ app.get(
     res.json(await getStatement(range, req.query.refresh === '1'));
   })
 );
+
+/** Recomputes the statements people actually open (current YTD + recent full
+ * years) whenever a sync may have invalidated them. Warm hits cost almost
+ * nothing, so running this after every sync is cheap insurance against the
+ * cold-load wait on the P&L page. */
+let warmingCaches = false;
+async function warmStatementCaches(): Promise<void> {
+  if (warmingCaches) return;
+  warmingCaches = true;
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const year = Number(today.slice(0, 4));
+    const ranges = [
+      { start: `${year}-01-01`, end: monthDateRange(today.slice(0, 7)).end },
+      ...[1, 2, 3].map((i) => ({ start: `${year - i}-01-01`, end: `${year - i}-12-31` })),
+    ];
+    for (const range of ranges) {
+      const t0 = Date.now();
+      try {
+        await getStatement(range, false);
+        const ms = Date.now() - t0;
+        if (ms > 1000) console.log(`[warm] ${range.start}..${range.end} recomputed in ${(ms / 1000).toFixed(1)}s`);
+      } catch (err: any) {
+        console.warn(`[warm] ${range.start}..${range.end} failed: ${err.message}`);
+      }
+    }
+  } finally {
+    warmingCaches = false;
+  }
+}
 
 // ---- drill-down details: the transactions behind each statement line ----
 
@@ -1100,13 +2439,14 @@ app.get(
         }));
       const result = await dedupe(`dt:${line}:${range.start}:${range.end}`, async () => {
         const api = await getComputeApi();
+        const { opts: spendOpts } = await getSpendOpts(api);
         // Direct costs group by cost category (freight / repairs / materials):
         // one compute per account so every row knows which account it hit.
         if (line === 'directCosts' && accounts.length > 1) {
           const rows: DetailRow[] = [];
           let sum = 0;
           for (const a of accounts) {
-            const spend = await computeMonthlySpend(api, [a.id], range);
+            const spend = await computeMonthlySpend(api, [a.id], range, spendOpts);
             sum += spend.total;
             rows.push(...toRows(spend, () => `${a.acctNum ? `#${a.acctNum} ` : ''}${a.name}`));
           }
@@ -1114,7 +2454,7 @@ app.get(
           return { rows, sum: Math.round(sum * 100) / 100 };
         }
         // Inventory and tax group by payee.
-        const spend = await computeMonthlySpend(api, accounts.map((a) => a.id), range);
+        const spend = await computeMonthlySpend(api, accounts.map((a) => a.id), range, spendOpts);
         return { rows: toRows(spend, (t) => t.vendor), sum: spend.total };
       });
       const note =
@@ -1124,7 +2464,7 @@ app.get(
       return res.json({ line, rows: result.rows, sum: result.sum, note });
     }
 
-    const incomeLines = ['deposits', 'invoicePayments', 'salesReceipts', 'refunds', 'rebates', 'reimbursements'];
+    const incomeLines = ['deposits', 'invoicePayments', 'salesReceipts', 'refunds', 'feedRefunds', 'rebates', 'reimbursements'];
     if (incomeLines.includes(line)) {
       const detail = await getPnlDetailFor(range);
       const rows = (detail as any)[line] as DetailRow[];
@@ -1208,12 +2548,295 @@ app.get(
         start: range.start,
         end: range.end,
         total: spend.total,
+        note: 'Diagnostic view — funding-account exclusions are deliberately NOT applied here, so excluded accounts remain visible.',
         byFundingAccount: [...by.entries()]
           .map(([id, v]) => ({ id, ...v, amount: Math.round(v.amount * 100) / 100 }))
           .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount)),
       };
     });
     res.json(result);
+  })
+);
+
+/** Every payment drawn from a given account, with the bills each one paid and
+ * any vendor credits applied — the working data for cleaning up the "ACH"
+ * clearing-account era (void payment → re-apply credits → match feed twin). */
+app.get(
+  '/api/funding-payments',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const range = validDateRange(req, res);
+    if (!range) return;
+    const token = String(req.query.account || '');
+    if (!token) return res.status(400).json({ error: 'Provide ?account=<name or number>' });
+    const api = await getComputeApi();
+    const match = await resolveAccounts(api, [token], /./);
+    const accountId = String(match[0].Id);
+    const payments: any[] = [];
+    for (const bp of await api.queryByDateRange('BillPayment', range.start, range.end)) {
+      const funding =
+        bp.CheckPayment?.BankAccountRef?.value || bp.CreditCardPayment?.CCAccountRef?.value;
+      if (String(funding) !== accountId) continue;
+      const bills: any[] = [];
+      let creditsApplied = 0;
+      for (const line of bp.Line || []) {
+        for (const lt of line.LinkedTxn || []) {
+          if (lt.TxnType === 'Bill') bills.push({ id: String(lt.TxnId), amount: Number(line.Amount) || 0 });
+          if (lt.TxnType === 'VendorCredit') creditsApplied += Number(line.Amount) || 0;
+        }
+      }
+      // Bill doc numbers make the checklist human-usable.
+      for (const b of bills) {
+        try {
+          const bill = await api.getBill(b.id);
+          b.docNumber = bill?.DocNumber || null;
+          b.billTotal = Number(bill?.TotalAmt) || null;
+        } catch { b.docNumber = null; }
+      }
+      payments.push({
+        date: bp.TxnDate,
+        vendor: bp.VendorRef?.name || 'Unknown vendor',
+        total: Number(bp.TotalAmt) || 0,
+        txnId: String(bp.Id),
+        txnType: 'BillPayment',
+        bills,
+        creditsApplied: Math.round(creditsApplied * 100) / 100,
+      });
+    }
+    for (const p of await api.queryByDateRange('Purchase', range.start, range.end)) {
+      if (String(p.AccountRef?.value) !== accountId) continue;
+      payments.push({
+        date: p.TxnDate,
+        vendor: p.EntityRef?.name || 'Unknown payee',
+        total: (p.Credit === true ? -1 : 1) * (Number(p.TotalAmt) || 0),
+        txnId: String(p.Id),
+        txnType: p.PaymentType === 'Check' ? 'Check' : 'Purchase',
+        bills: [],
+        creditsApplied: 0,
+      });
+    }
+    payments.sort((a, b) => a.vendor.localeCompare(b.vendor) || a.date.localeCompare(b.date));
+    res.json({
+      account: { id: accountId, name: match[0].Name },
+      start: range.start,
+      end: range.end,
+      count: payments.length,
+      total: Math.round(payments.reduce((s, p) => s + p.total, 0) * 100) / 100,
+      payments,
+    });
+  })
+);
+
+// ---- ACH-cleanup reclassify (the app's ONLY write path; Chris-approved 2026-07-16) ----
+// Admin-gated end to end: the agent/service account cannot reach these routes.
+// Every run re-validates each transaction against LIVE QuickBooks; failures
+// are skipped and reported, and every write stores a before-image for revert.
+
+interface BeltRow {
+  txnId: string;
+  expectedAmount: number;
+  /** Per-row target account token (manifest tasks); ach-belt rows omit it. */
+  to?: string;
+}
+
+/** Each cleanup task Chris has explicitly approved gets an entry here; the
+ * endpoints refuse any unknown task name. */
+const CLEANUP_TASKS: Record<
+  string,
+  { file: string; from: 'inventory' | string; defaultTo?: string; fundedFrom?: string; allowCredit?: boolean }
+> = {
+  'ach-belt': { file: 'ach-belt.json', from: 'inventory', defaultTo: 'ACH' },
+  // Token is the account NUMBER: resolveAccounts matches AcctNum/Name exactly,
+  // and the account's Name is just "Payroll Expenses".
+  'tax-pulls-2023': { file: 'tax-pulls-2023.json', from: '66000' },
+  'tax-pulls-2024': { file: 'tax-pulls-2024.json', from: '66000' },
+  'ach-stragglers': { file: 'ach-stragglers.json', from: 'inventory', defaultTo: 'ACH' },
+  // 2025-26 card-register repair (Chris: "lets just make sure 2025 and 2026 are
+  // fixed", 2026-07-17): bank-side card payments whose card-side AUTOPAY record
+  // already reduces the card move to the Credit Cards wash account, so each
+  // payment counts once. Dollar-neutral between balance-sheet accounts.
+  'card-payments-2025-26-amex': { file: 'card-payments-2025-26-amex.json', from: 'PLATINUM Amex Credit Card -009', defaultTo: 'Credit Cards' },
+  'card-payments-2025-26-purple': { file: 'card-payments-2025-26-purple.json', from: 'AX Purple (64001)', defaultTo: 'Credit Cards' },
+  // 2026 money-map financing audit (Chris: "the credit card section seems weird
+  // to me and having federal taxes there is strange", 2026-09-10):
+  // Jens's PERSONAL IRS payments (1040 balance-due + 1040-ES) were coded to the
+  // company payroll-tax account; move them to the 1040-ES personal-tax account
+  // the accountant already uses, where the money map counts them as owner money.
+  'jens-personal-taxes-2026': { file: 'jens-personal-taxes-2026.json', from: '21002', defaultTo: '21005' },
+  // Card-side AUTOPAY records whose category points back at a card instead of
+  // the Credit Cards wash account. Three are AX Purple credits coded to AX
+  // Purple itself (a self-cancelling no-op), one is a PLATINUM Amex credit
+  // coded to AX Purple (inflating Purple's balance by $106k). Re-pointing the
+  // category at the wash makes each payment count once and zeroes the wash.
+  // These records are Credit Card CREDITS funded from the card, so the tasks
+  // carry fundedFrom + allowCredit; validation is otherwise unchanged.
+  'card-autopay-credits-2026-purple': { file: 'card-autopay-credits-2026-purple.json', from: 'AX Purple (64001)', defaultTo: 'Credit Cards', fundedFrom: 'AX Purple (64001)', allowCredit: true },
+  'card-autopay-credits-2026-amex': { file: 'card-autopay-credits-2026-amex.json', from: 'AX Purple (64001)', defaultTo: 'Credit Cards', fundedFrom: 'PLATINUM Amex Credit Card -009', allowCredit: true },
+};
+
+function loadBelt(task: string): BeltRow[] {
+  const t = CLEANUP_TASKS[task];
+  if (!t) throw Object.assign(new Error(`Unknown cleanup task "${task}"`), { statusCode: 400 });
+  const p = path.join(__dirname, '..', 'cleanup', t.file);
+  return (JSON.parse(fs.readFileSync(p, 'utf8')).rows as BeltRow[]) || [];
+}
+
+const accountTokenCache = new Map<string, { id: string; name: string }>();
+async function resolveToken(api: QboApi, token: string): Promise<{ id: string; name: string }> {
+  const hit = accountTokenCache.get(token);
+  if (hit) return hit;
+  const [a] = await resolveAccounts(api, [token], /./);
+  const out = { id: String(a.Id), name: a.Name as string };
+  accountTokenCache.set(token, out);
+  return out;
+}
+
+async function reclassifyCfg(api: QboApi, task: string, row: BeltRow) {
+  const spec = CLEANUP_TASKS[task];
+  const fromIds =
+    spec.from === 'inventory'
+      ? new Set((await getTrackedAccounts(api)).map((t) => t.id))
+      : new Set([(await resolveToken(api, spec.from)).id]);
+  const to = await resolveToken(api, row.to ?? spec.defaultTo!);
+  const funding = await resolveToken(api, spec.fundedFrom ?? 'Zions Bank Checking (8882)');
+  return {
+    zionsId: funding.id,
+    toId: to.id,
+    toName: to.name,
+    fromIds,
+    expectedAmount: row.expectedAmount,
+    allowCredit: spec.allowCredit === true,
+  };
+}
+
+app.get(
+  '/api/reclassify/status',
+  requireAuth,
+  requireAdmin,
+  asyncRoute(async (req, res) => {
+    const belt = loadBelt(String(req.query.task || 'ach-belt'));
+    const log = await getPool().query(
+      `SELECT txn_id, moved, reclassified_at, reverted_at FROM reclassify_log`
+    );
+    const done = new Set(log.rows.filter((r) => !r.reverted_at).map((r) => r.txn_id));
+    const pending = belt.filter((r) => !done.has(r.txnId));
+    let achBalance: number | null = null;
+    try {
+      const api = await createQboApi();
+      const ach = (await api.listAccounts()).find((a: any) => a.Name === 'ACH');
+      achBalance = ach ? Number(ach.CurrentBalance) : null;
+    } catch { /* balance is a nicety */ }
+    res.json({
+      beltTotal: belt.length,
+      done: done.size,
+      pending: pending.length,
+      pendingAmount: Math.round(pending.reduce((s, r) => s + r.expectedAmount, 0) * 100) / 100,
+      movedAmount: Math.round(log.rows.filter((r) => !r.reverted_at).reduce((s, r) => s + Number(r.moved), 0) * 100) / 100,
+      achBalance,
+    });
+  })
+);
+
+app.post(
+  '/api/reclassify/run',
+  requireAuth,
+  requireAdmin,
+  asyncRoute(async (req, res) => {
+    const limit = Math.min(Math.max(parseInt(String(req.body?.limit ?? '25'), 10) || 25, 1), 100);
+    const dryRun = req.body?.dryRun === true;
+    const task = String(req.body?.task || 'ach-belt');
+    const belt = loadBelt(task);
+    const log = await getPool().query(`SELECT txn_id FROM reclassify_log WHERE reverted_at IS NULL`);
+    const done = new Set(log.rows.map((r) => r.txn_id));
+    const batch = belt.filter((r) => !done.has(r.txnId)).slice(0, limit);
+    const api = await createQboApi(); // writes always go straight to QuickBooks, never the mirror
+    const results: any[] = [];
+    for (const row of batch) {
+      try {
+        const live = await api.getPurchase!(row.txnId);
+        const plan = planReclassify(live, await reclassifyCfg(api, task, row));
+        if (!plan.ok) {
+          // Rows Chris already reclassified by hand on the conveyor are done —
+          // retire them so the pending count reaches zero.
+          if (plan.reason === 'already reclassified' && !dryRun) {
+            await getPool().query(
+              `INSERT INTO reclassify_log (txn_id, before, after, moved)
+               VALUES ($1, $2, $3, 0) ON CONFLICT (txn_id) DO NOTHING`,
+              [row.txnId, JSON.stringify({ doneByHand: true }), JSON.stringify(live)]
+            );
+            results.push({ txnId: row.txnId, status: 'gone', reason: 'already reclassified by hand — retired from the belt' });
+            continue;
+          }
+          results.push({ txnId: row.txnId, status: 'skipped', reason: plan.reason });
+          continue;
+        }
+        if (dryRun) {
+          results.push({ txnId: row.txnId, status: 'would-reclassify', amount: plan.moving });
+          continue;
+        }
+        const saved = await api.updatePurchase!(plan.updated);
+        await getPool().query(
+          `INSERT INTO reclassify_log (txn_id, before, after, moved)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (txn_id) DO UPDATE SET before = EXCLUDED.before, after = EXCLUDED.after,
+             moved = EXCLUDED.moved, reclassified_at = now(), reverted_at = NULL`,
+          [row.txnId, JSON.stringify(live), JSON.stringify(saved), plan.moving]
+        );
+        await upsertTxns('Purchase', [saved]); // keep the mirror truthful immediately
+        results.push({ txnId: row.txnId, status: 'reclassified', amount: plan.moving });
+      } catch (err: any) {
+        // A deleted transaction (e.g. one Chris already removed by hand in the
+        // earlier delete-and-match workflow) can never be reclassified — retire
+        // it from the belt so batches don't retry it forever.
+        if (/Object Not Found/i.test(err.message || '') && !dryRun) {
+          await getPool().query(
+            `INSERT INTO reclassify_log (txn_id, before, after, moved)
+             VALUES ($1, $2, $3, 0)
+             ON CONFLICT (txn_id) DO NOTHING`,
+            [row.txnId, JSON.stringify({ missing: true }), JSON.stringify({})]
+          );
+          results.push({ txnId: row.txnId, status: 'gone', reason: 'already deleted in QuickBooks — retired from the belt' });
+        } else {
+          results.push({ txnId: row.txnId, status: 'error', reason: err.message?.slice(0, 200) });
+        }
+      }
+    }
+    const ok = results.filter((r) => r.status === 'reclassified' || r.status === 'would-reclassify');
+    res.json({
+      dryRun,
+      attempted: batch.length,
+      succeeded: ok.length,
+      amount: Math.round(ok.reduce((s, r) => s + (r.amount || 0), 0) * 100) / 100,
+      results,
+    });
+  })
+);
+
+app.post(
+  '/api/reclassify/revert',
+  requireAuth,
+  requireAdmin,
+  asyncRoute(async (req, res) => {
+    const txnIds: string[] = Array.isArray(req.body?.txnIds) ? req.body.txnIds.map(String) : [];
+    if (!txnIds.length) return res.status(400).json({ error: 'Provide { txnIds: [...] }' });
+    const api = await createQboApi();
+    const results: any[] = [];
+    for (const id of txnIds.slice(0, 100)) {
+      try {
+        const log = await getPool().query(`SELECT before FROM reclassify_log WHERE txn_id = $1`, [id]);
+        if (!log.rows.length) { results.push({ txnId: id, status: 'skipped', reason: 'not in reclassify log' }); continue; }
+        const live = await api.getPurchase!(id);
+        const plan = planRevert(live, log.rows[0].before);
+        if (!plan.ok) { results.push({ txnId: id, status: 'skipped', reason: plan.reason }); continue; }
+        const saved = await api.updatePurchase!(plan.updated);
+        await getPool().query(`UPDATE reclassify_log SET reverted_at = now() WHERE txn_id = $1`, [id]);
+        await upsertTxns('Purchase', [saved]);
+        results.push({ txnId: id, status: 'reverted' });
+      } catch (err: any) {
+        results.push({ txnId: id, status: 'error', reason: err.message?.slice(0, 200) });
+      }
+    }
+    res.json({ results });
   })
 );
 
@@ -1259,10 +2882,11 @@ app.get(
 
     // 2 — the income number decomposes exactly into its parts.
     const decomposed =
-      stmt.income.deposits + stmt.income.invoicePayments + (stmt.income.salesReceipts || 0) - stmt.income.refunds;
+      stmt.income.deposits + stmt.income.invoicePayments + (stmt.income.salesReceipts || 0) - stmt.income.refunds -
+      (stmt.income.feedRefunds || 0);
     add({
       id: 'income-decomposition',
-      name: 'Income equals deposits + payments − refunds, to the cent',
+      name: 'Income equals deposits + payments − refunds (incl. bank-feed refunds), to the cent',
       status: near(decomposed, stmt.income.moneyIn) ? 'pass' : 'fail',
       expected: stmt.income.moneyIn,
       actual: Math.round(decomposed * 100) / 100,
@@ -1290,14 +2914,27 @@ app.get(
         const after = reportBalances(await api.balanceSheet(range.end));
         let delta = 0;
         for (const id of taxIds) delta += (after.get(id)?.value ?? 0) - (before.get(id)?.value ?? 0);
-        const ledgerRemitted = Math.round(-delta * 100) / 100;
+        // Accrual-aware: monthly JEs crediting collected tax into the liability
+        // (Chris's regime from 2026-07 onward) raise the balance without any cash
+        // moving, so remitted = JE accruals − balance change. With no JEs this
+        // reduces to the old “balance went down by what was remitted”.
+        const taxIdSet = new Set(taxIds.map(String));
+        let jeAccruals = 0;
+        for (const je of await api.queryByDateRange('JournalEntry', range.start, range.end)) {
+          for (const l of je.Line || []) {
+            const d = l.JournalEntryLineDetail;
+            if (!d || !taxIdSet.has(String(d.AccountRef?.value))) continue;
+            jeAccruals += (d.PostingType === 'Credit' ? 1 : -1) * (Number(l.Amount) || 0);
+          }
+        }
+        const ledgerRemitted = Math.round((jeAccruals - delta) * 100) / 100;
         const tol = Math.max(1, stmt.income.salesTaxRemitted * 0.001);
         taxCheck = {
           ...taxCheck,
           status: near(ledgerRemitted, stmt.income.salesTaxRemitted, tol) ? 'pass' : 'fail',
           expected: ledgerRemitted,
           explain:
-            'The tax deducted from revenue should equal how much the sales-tax account actually went down. A mismatch means tax was deducted too much or too little.',
+            'The tax deducted from revenue should equal what actually left the tax account (journal-entry accruals minus the balance change). A mismatch means tax was deducted too much or too little.',
         };
       }
     } catch {
@@ -1437,6 +3074,43 @@ app.get(
       link: `/pnl?${qs}`,
     });
 
+    // 10 — every payment record is internally consistent: the bill lines'
+    // covered amounts must equal actual cash + applied credits. This is the
+    // data shape the cash-only COGS rule (D33) rests on; if the bookkeepers
+    // ever record payments differently, this check catches it immediately.
+    try {
+      const api = await getComputeApi();
+      let violations = 0;
+      let mismatch = 0;
+      let paymentsChecked = 0;
+      for (const bp of await api.queryByDateRange('BillPayment', range.start, range.end)) {
+        let coverage = 0;
+        let credits = 0;
+        for (const line of bp.Line || []) {
+          const linked: any[] = line.LinkedTxn || [];
+          if (linked.some((t) => t.TxnType === 'VendorCredit')) credits += Number(line.Amount) || 0;
+          else if (linked.some((t) => t.TxnType === 'Bill')) coverage += Number(line.Amount) || 0;
+        }
+        if (coverage === 0) continue;
+        paymentsChecked++;
+        const gap = Math.abs(coverage - credits - (Number(bp.TotalAmt) || 0));
+        if (gap > 0.02) { violations++; mismatch += gap; }
+      }
+      mismatch = Math.round(mismatch * 100) / 100;
+      add({
+        id: 'payment-line-identity',
+        name: 'Every bill payment audits clean: covered amounts = cash + credits',
+        status: mismatch <= 500 ? (violations === 0 ? 'pass' : 'warn') : mismatch <= 10000 ? 'warn' : 'fail',
+        expected: `${paymentsChecked} payments, $0.00 mismatch`,
+        actual: violations === 0 ? `${paymentsChecked} payments, all clean` : `${violations} payment(s) off by $${mismatch.toFixed(2)} total`,
+        explain:
+          'The cash-only COGS rule reads each payment as: bill coverage = actual cash + applied credits. A mismatch means a payment was recorded in a shape the engine doesn’t expect — its cost attribution could be off by the mismatch amount.',
+        link: `/pnl?${qs}`,
+      });
+    } catch (err: any) {
+      console.warn('[checks] payment-line-identity unavailable:', err.message);
+    }
+
     const counts = {
       pass: checks.filter((c) => c.status === 'pass').length,
       warn: checks.filter((c) => c.status === 'warn').length,
@@ -1455,6 +3129,166 @@ app.get(
     if (status.running) return res.json({ started: false, ...status });
     runSync(req.query.full === '1').catch(() => undefined);
     res.json({ started: true, ...status });
+  })
+);
+
+// ---- Where the money went: the profit-to-bank proof as a report ----
+// Categorizes every balance-sheet move over the range using the rules proven
+// in the 2026-07-17 session (brain: concepts/profit-to-bank-proof.md):
+// NOI(cash income, count-adjusted COGS, books expenses) ≈ Δreal banks
+// + Δinventory(counts) + owner outflows + capex + old-liability paydowns
+// − new card/vendor financing. NO A/R, NO credit memos (never in cash income),
+// NO sales-tax-payable drift (no-accrual artifact), NO broken accounts
+// (sign-flipped Amex, negative Cash on Hand, fake clearing banks).
+
+app.get(
+  '/api/money-map',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const range = validDateRange(req, res);
+    if (!range) return;
+    const result = await dedupe(`mm:${range.start}:${range.end}`, async () => {
+      const api = await getComputeApi();
+      const stmt: any = await getStatement(range, false);
+      const cf = await computeCashFlow(api, dayBefore(range.start), range.end);
+      const beginCount = await countAsOf(range.start === range.end ? dayBefore(range.start) : range.start);
+      const endCount = await countAsOf(range.end);
+
+      type Cat = { key: string; label: string; note: string; inProof: boolean; total: number; accounts: any[] };
+      const cats: Record<string, Cat> = {};
+      const cat = (key: string, label: string, note: string, inProof: boolean): Cat =>
+        (cats[key] ??= { key, label, note, inProof, total: 0, accounts: [] });
+      const put = (c: Cat, m: any, amount: number) => {
+        c.accounts.push({ ...m, amount: Math.round(amount * 100) / 100 });
+        c.total = Math.round((c.total + amount) * 100) / 100;
+      };
+
+      const REAL_BANK = /zions|xions/i;
+      for (const m of cf.bankAccounts) {
+        if (REAL_BANK.test(m.name)) put(cat('banks', 'Bank accounts (real)', 'Zions checking and savings — the hardest number there is. Click through to the bank report to see every dollar in and out.', true), m, m.change);
+        else if (/federal estimated tax/i.test(m.name)) put(cat('owners', 'Money to the owners', 'Distributions, dividends, and personal tax prepayments (1040-ES).', true), m, m.change);
+        else put(cat('broken', 'Excluded — broken or artificial accounts', 'Movements here are bookkeeping artifacts, not money: the fake clearing banks, impossible negative cash, and the sign-flipped Amex history. Each needs a bookkeeper repair, not a P&L explanation.', false), m, m.change);
+      }
+      for (const m of cf.moves) {
+        const n = m.name.toLowerCase();
+        const use = -m.cashEffect; // profit parked: asset growth / liability paydown
+        if (/^(material inventory|boise inventory)$/i.test(m.name)) continue; // replaced by physical counts
+        if (/sales tax payable/i.test(m.name)) { put(cat('broken', 'Excluded — broken or artificial accounts', '', false), m, 0); continue; }
+        if (/amex.*009|platinum amex/i.test(m.name) || (m.type === 'Credit Card' && m.before < -500000)) { put(cat('broken', 'Excluded — broken or artificial accounts', '', false), m, 0); continue; }
+        if (/cash on hand|fraud/i.test(n)) { put(cat('broken', 'Excluded — broken or artificial accounts', '', false), m, 0); continue; }
+        if (m.type === 'Accounts Receivable' || /credit memo/i.test(n)) {
+          put(cat('owed', 'Owed to you (not profit yet)', 'Audited 2026-07-19: this is NOT customers owing you money (real customer A/R is ~$0). It is ~79% vendor rebates/co-op/instant-rebate claims owed to you by Canon, Nikon, Sony, etc. (settled later by credit memos, not cash) and ~21% the Boise intercompany line. The P&L only counts cash that has landed, and these settle by credit — so none of this is in the profit being proven.', false), m, m.change);
+          continue;
+        }
+        if (m.type === 'Equity' && /dist|dividend|draw/i.test(n)) { put(cat('owners', 'Money to the owners', 'Distributions, dividends, and personal tax prepayments (1040-ES).', true), m, use); continue; }
+        if (/jens/i.test(n)) { put(cat('owners', 'Money to the owners', '', true), m, use); continue; }
+        if (m.type === 'Fixed Asset') { put(cat('capex', 'Built into the business', 'Store build-out, furniture, equipment — cash that became property.', true), m, use); continue; }
+        if (m.type === 'Accounts Payable') {
+          // Mirror image of A/R: unpaid vendor bills are neither cost (cost
+          // lands when PAID, Chris's rule) nor a destination of profit.
+          put(cat('owedByYou', 'Unpaid vendor bills (not cost yet)', 'Bills received but not yet paid. Under your rule these become cost on the day you pay them — until then they are neither profit nor its destination, just goods waiting on the payment.', false), m, m.change);
+          continue;
+        }
+        if (m.type === 'Credit Card' || /w\/h|withhold|direct deposit|payroll.*payable/i.test(n)) {
+          put(cat('financing', 'Cards & payroll dues', 'Negative means they lent you more this period (money you got to use without earning it yet); positive means you paid old dues down.', true), m, use);
+          continue;
+        }
+        put(cat('other', 'Everything else on the balance sheet', 'Small accounts that moved; positive parks profit, negative frees it.', true), m, use);
+      }
+
+      // The broken Amex register and the invisible "Credit Cards" wash account:
+      // their book balances are unusable, but the PERIOD MOVEMENT is verified
+      // accurate from 2025 on (2026-07-17 repair session) — measure it from
+      // the mirrored transactions so card money stops vanishing from the proof.
+      if (range.start >= '2025-01-01') {
+        const MEASURED_CARDS = [
+          {
+            id: '63', name: 'Amex Platinum — payments minus charges this period',
+            detail:
+              'No running balance shown: this card’s books are broken (missing years of charges), so we can’t trust a start/end number — we only trust the movement, rebuilt from the actual transactions. Negative = you paid the card down more than you charged. Returned payments (like the July autopay Amex bounced and sent back) are counted correctly, so they don’t inflate this.',
+          },
+          {
+            id: '99', name: 'Card payment clearing (timing between the two feeds)',
+            detail:
+              'The account payments pass through on their way to the cards. It nets near zero over a full clean period; a leftover here is just payments whose matching charge lands in a different month.',
+          },
+        ];
+        for (const spec of MEASURED_CARDS) {
+          const net = await registerMovement(api, spec.id, range.start, range.end);
+          if (Math.abs(net) > 0.005) {
+            const m = {
+              id: spec.id, name: spec.name, acctNum: null, type: 'Credit Card',
+              before: null, after: null, change: net, detail: spec.detail,
+            };
+            put(cat('financing', 'Cards & payroll dues', 'Negative means they lent you more this period (money you got to use without earning it yet); positive means you paid old dues down.', true), m, -net);
+          }
+        }
+      }
+
+      const inventoryChange =
+        beginCount && endCount ? Math.round((endCount.value - beginCount.value) * 100) / 100 : null;
+      if (inventoryChange !== null) {
+        const c = cat('inventory', 'Inventory on the shelves', 'From your physical counts — the book inventory accounts are excluded because their values are broken.', true);
+        c.total = inventoryChange;
+        c.accounts.push({
+          id: null, name: 'Physical inventory (your counts)', acctNum: null, type: 'Counts',
+          before: beginCount!.value, after: endCount!.value, change: inventoryChange, amount: inventoryChange,
+          detail: `${beginCount!.asOf} → ${endCount!.asOf}`,
+        });
+      }
+
+      const order = ['banks', 'inventory', 'owners', 'capex', 'financing', 'other', 'owed', 'owedByYou', 'broken'];
+      const categories = order.filter((k) => cats[k]).map((k) => cats[k]);
+      for (const c of categories) c.accounts.sort((a, b) => Math.abs(b.amount || b.change) - Math.abs(a.amount || a.change));
+      const accounted = Math.round(categories.filter((c) => c.inProof).reduce((s, c) => s + c.total, 0) * 100) / 100;
+      const noi = stmt.adjusted ? stmt.adjusted.noi : stmt.noi;
+      return {
+        start: range.start,
+        end: range.end,
+        noi,
+        basis: stmt.adjusted ? 'accounting (physical counts)' : 'cash (no counts for this range)',
+        accounted,
+        residual: Math.round((noi - accounted) * 100) / 100,
+        categories,
+        countWarning: inventoryChange === null ? 'No inventory counts near this range — inventory movement is missing from the proof.' : null,
+      };
+    });
+    res.json(result);
+  })
+);
+
+/** The books' accrual P&L, sectioned — read-only diagnostic for comparing the
+ * app's cash-verified statement against what QuickBooks itself reports. */
+app.get(
+  '/api/books-pnl',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const range = validDateRange(req, res);
+    if (!range) return;
+    const api = await createQboApi();
+    const report = await api.profitAndLoss(range.start, range.end);
+    const sections: Record<string, { total: number; rows: { name: string; amount: number; id: string | null }[] }> = {};
+    const walk = (rows: any, section: string | null) => {
+      for (const row of rows?.Row || []) {
+        const header = row.Header?.ColData?.[0]?.value || '';
+        const sec = section ?? (header || null);
+        if (row.Summary && header && !section) {
+          sections[header] = sections[header] || { total: 0, rows: [] };
+          sections[header].total = Number(row.Summary.ColData?.[1]?.value) || 0;
+        }
+        const col = row.ColData;
+        if (section && col?.length >= 2 && col[0]?.value) {
+          const amt = Number(col[col.length - 1]?.value);
+          if (!Number.isNaN(amt) && amt !== 0) {
+            sections[section] = sections[section] || { total: 0, rows: [] };
+            sections[section].rows.push({ name: col[0].value, amount: amt, id: col[0].id ?? null });
+          }
+        }
+        if (row.Rows) walk(row.Rows, sec);
+      }
+    };
+    walk(report?.Rows, null);
+    res.json({ start: range.start, end: range.end, basis: 'accrual (as QuickBooks reports it)', sections });
   })
 );
 
@@ -1525,8 +3359,10 @@ app.get(['/', '/index.html'], requireAuth, (_req, res) => res.sendFile(pub('inde
 app.get('/pnl', requireAuth, (_req, res) => res.sendFile(pub('pnl.html')));
 app.get('/bank', requireAuth, (_req, res) => res.sendFile(pub('bank.html')));
 app.get('/cashflow', requireAuth, (_req, res) => res.sendFile(pub('cashflow.html')));
+app.get('/money', requireAuth, (_req, res) => res.sendFile(pub('money.html')));
 app.get('/inventory', requireAuth, (_req, res) => res.sendFile(pub('inventory.html')));
 app.get('/checks', requireAuth, (_req, res) => res.sendFile(pub('checks.html')));
+app.get('/cleanup', requireAuth, (_req, res) => res.sendFile(pub('cleanup.html')));
 app.get('/password', requireAuth, (_req, res) => res.sendFile(pub('password.html')));
 app.get('/users', requireAuth, (_req, res) => res.sendFile(pub('users.html')));
 
@@ -1543,8 +3379,12 @@ async function main() {
     await bootstrapAdmin();
     // Keep the raw-transaction mirror fresh: check at boot and twice daily.
     if (!missingQboConfig().length) {
+      setOnSyncComplete(() => { warmStatementCaches().catch(() => undefined); });
       setTimeout(() => syncIfStale(), 15_000);
       setInterval(() => syncIfStale(), 12 * 60 * 60 * 1000);
+      // Boot-time warm too: QuickBooks edits made while the app was redeploying
+      // would otherwise leave the first visitor on the cold path.
+      setTimeout(() => warmStatementCaches().catch(() => undefined), 60_000);
     }
   } else {
     console.warn('[db] DATABASE_URL not set — token storage and caching disabled');

@@ -13,9 +13,11 @@
     "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
+    "@types/nodemailer": "^8.0.1",
     "express": "^4.21.2",
     "intuit-oauth": "^4.2.0",
     "node-quickbooks": "^2.0.46",
+    "nodemailer": "^9.0.5",
     "pg": "^8.13.1"
   },
   "devDependencies": {

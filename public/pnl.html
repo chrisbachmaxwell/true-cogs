@@ -19,6 +19,12 @@
   .qlink:hover { text-decoration: underline; }
   tr.exp-click { cursor: pointer; }
   tr.exp-click:hover td { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+  .srow.open, tr.exp-click.open td { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  .card.drawer-mode { background: var(--surface-2); box-shadow: none; border: 1px solid var(--hairline);
+    margin: 8px 0 12px; padding: 14px 16px; }
+  .card.drawer-mode table { font-size: 12.5px; }
+  .card.drawer-mode .dscroll { max-height: 440px; overflow: auto; }
+  tr.dhost > td { padding: 0; border-bottom: none; }
 </style>
 </head>
 <body>
@@ -36,23 +42,31 @@
   <div class="banner" id="banner"></div>
 
   <div class="card" style="margin-top:22px">
+    <div style="display:flex;justify-content:flex-end;margin-bottom:6px">
+      <select id="cmpYear" style="font:inherit;font-size:13px;padding:6px 9px;border-radius:9px;border:1px solid var(--hairline);color:var(--ink);background:var(--surface)"></select>
+    </div>
+    <div id="cmpCard" style="display:none;margin-bottom:16px"></div>
     <div class="stmt" id="stmt"><div class="empty">Loading…</div></div>
     <div class="warnings" id="warnings"></div>
   </div>
 
-  <div class="card" id="detailCard" style="display:none">
-    <div class="dhead">
-      <h2 id="dTitle"></h2>
-      <button class="btn" id="dBack" style="display:none">← Categories</button>
-      <button class="btn" id="dCsv">Download CSV</button>
-      <button class="btn" id="dClose">Close</button>
+  <!-- The drill-down drawer: relocated inline under whatever was clicked;
+       parked here (hidden) whenever it's closed so re-renders can't destroy it. -->
+  <div id="detailPark" style="display:none">
+    <div class="card drawer-mode" id="detailCard">
+      <div class="dhead">
+        <h2 id="dTitle"></h2>
+        <button class="btn" id="dBack" style="display:none">← Categories</button>
+        <button class="btn" id="dCsv">Download CSV</button>
+        <button class="btn" id="dClose">Close ▲</button>
+      </div>
+      <div style="overflow-x:auto"><table>
+        <thead id="dHead"></thead>
+        <tbody id="dRows"></tbody>
+      </table></div>
+      <div class="dcheck" id="dCheck" style="display:none"></div>
+      <div class="dnote" id="dNote"></div>
     </div>
-    <div style="overflow-x:auto"><table>
-      <thead id="dHead"></thead>
-      <tbody id="dRows"></tbody>
-    </table></div>
-    <div class="dcheck" id="dCheck" style="display:none"></div>
-    <div class="dnote" id="dNote"></div>
   </div>
 
   <div class="card">
@@ -112,6 +126,7 @@ function expectedFor(key) {
     case 'invoicePayments': return d.income.invoicePayments;
     case 'salesReceipts': return d.income.salesReceipts;
     case 'refunds': return d.income.refunds;
+    case 'feedRefunds': return d.income.feedRefunds;
     case 'salesTax': return d.income.salesTaxRemitted;
     case 'inventory': return d.cogs.inventoryCash;
     case 'inventoryChange': return d.adjusted ? d.adjusted.inventoryChange : null;
@@ -126,16 +141,51 @@ function expectedFor(key) {
 // vendor, or customer); clicking a category shows its transactions.
 let dState = null; // { label, rows, groups, mode: 'groups'|'rows', group, expected, note, kind }
 
-function showPanel(title) {
+// ---- inline drawer plumbing: the ONE detail card relocates to sit directly
+// under whatever was clicked, and parks (hidden) when closed so statement and
+// table re-renders can never destroy it.
+let drawerAnchor = null;
+
+function parkDrawer() {
   const card = $('detailCard');
-  card.style.display = '';
+  const host = document.querySelector('tr.dhost');
+  $('detailPark').appendChild(card);
+  if (host) host.remove();
+  if (drawerAnchor) drawerAnchor.classList.remove('open');
+  drawerAnchor = null;
+  dState = null;
+  detailSeq++;
+}
+
+/** Places the drawer under anchorEl. Returns false if this click should just
+ * CLOSE it (same anchor toggled). */
+function attachDrawer(anchorEl) {
+  if (drawerAnchor === anchorEl) { parkDrawer(); return false; }
+  parkDrawer();
+  const card = $('detailCard');
+  if (anchorEl.tagName === 'TR') {
+    const host = document.createElement('tr');
+    host.className = 'dhost';
+    const td = document.createElement('td');
+    td.colSpan = anchorEl.children.length;
+    host.appendChild(td);
+    anchorEl.after(host);
+    td.appendChild(card);
+  } else {
+    anchorEl.after(card);
+  }
+  anchorEl.classList.add('open');
+  drawerAnchor = anchorEl;
+  return true;
+}
+
+function showPanel(title) {
   $('dTitle').textContent = title;
   $('dHead').innerHTML = '';
   $('dRows').innerHTML = '<tr><td colspan="4" class="empty">Loading…</td></tr>';
   $('dCheck').style.display = 'none';
   $('dBack').style.display = 'none';
   $('dNote').textContent = '';
-  card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 function groupRows(rows) {
@@ -316,13 +366,89 @@ function downloadCsv() {
   URL.revokeObjectURL(a.href);
 }
 
+// ---- side-by-side comparison with the same period of another year ----
+function cmpSetup() {
+  const sel = $('cmpYear');
+  const thisYear = Number(todayISO().slice(0, 4));
+  let h = '<option value="">Compare: off</option>';
+  for (let y = thisYear; y >= FIRST_DATA_YEAR; y--) h += '<option value="' + y + '">vs ' + y + '</option>';
+  sel.innerHTML = h;
+  sel.value = new URLSearchParams(location.search).get('cmp') || '';
+  sel.addEventListener('change', () => {
+    const p = new URLSearchParams(location.search);
+    if (sel.value) p.set('cmp', sel.value); else p.delete('cmp');
+    history.replaceState(null, '', location.pathname + '?' + p.toString());
+    load();
+  });
+}
+function shiftRangeToYear(r, year) {
+  const delta = year - Number(r.start.slice(0, 4));
+  const shift = (d) => {
+    let s = (Number(d.slice(0, 4)) + delta) + d.slice(4);
+    if (s.slice(5) === '02-29') s = s.slice(0, 5) + '02-28';
+    return s;
+  };
+  let end = shift(r.end);
+  if (end > todayISO()) end = todayISO();
+  return { start: shift(r.start), end };
+}
+function renderCompare(a, b, labelA, labelB) {
+  const pick = (d) => ({
+    revenue: d.income.netRevenue,
+    cogs: d.adjusted ? d.adjusted.cogsTotal : d.cogs.total,
+    gp: d.adjusted ? d.adjusted.grossProfit : d.grossProfit,
+    gpPct: d.adjusted ? d.adjusted.grossMarginPct : d.grossMarginPct,
+    expenses: d.expenses.net,
+    noi: d.adjusted ? d.adjusted.noi : d.noi,
+    basis: d.adjusted ? 'accounting' : 'cash',
+  });
+  const A = pick(a), B = pick(b);
+  const money = (v) => usd.format(v);
+  const line = (name, va, vb, pct) => {
+    const diff = va - vb;
+    const dPct = vb !== 0 ? (diff / Math.abs(vb)) * 100 : null;
+    return '<tr><td>' + name + '</td><td class="num">' + (pct ? (va == null ? '—' : va.toFixed(1) + '%') : money(va)) +
+      '</td><td class="num">' + (pct ? (vb == null ? '—' : vb.toFixed(1) + '%') : money(vb)) +
+      '</td><td class="num" style="color:' + (diff >= 0 ? 'var(--good, #34c759)' : 'var(--bad)') + '">' +
+      (pct ? ((va == null || vb == null) ? '—' : (diff >= 0 ? '+' : '') + diff.toFixed(1) + ' pts')
+           : (diff >= 0 ? '+' : '') + money(diff) + (dPct === null ? '' : ' (' + (dPct >= 0 ? '+' : '') + dPct.toFixed(1) + '%)')) +
+      '</td></tr>';
+  };
+  $('cmpCard').innerHTML =
+    '<div style="overflow-x:auto"><table>' +
+    '<thead><tr><th></th><th class="num">' + labelA + '</th><th class="num">' + labelB + '</th><th class="num">Change</th></tr></thead><tbody>' +
+    line('Net revenue', A.revenue, B.revenue) +
+    line('COGS', A.cogs, B.cogs) +
+    line('Gross profit', A.gp, B.gp) +
+    line('Gross margin', A.gpPct, B.gpPct, true) +
+    line('Expenses', A.expenses, B.expenses) +
+    line('Net operating income', A.noi, B.noi) +
+    '</tbody></table></div>' +
+    (A.basis !== B.basis ? '<div class="dnote">Note: one side lacks inventory counts, so it shows the cash basis.</div>' : '');
+  $('cmpCard').style.display = '';
+}
+
 async function load(force) {
+  parkDrawer(); // the statement and expense tables re-render — never let them eat the drawer
   const fresh = staleGuard();
   setLoading(true);
   try {
-    const d = await jfetch('/api/pnl-statement?' + Range.qs() + (force ? '&refresh=1' : ''));
+    const cmpYear = $('cmpYear') ? $('cmpYear').value : '';
+    const r = Range.get();
+    const wantCmp = cmpYear && Number(cmpYear) !== Number(r.start.slice(0, 4));
+    const cmpRange = wantCmp ? shiftRangeToYear(r, Number(cmpYear)) : null;
+    const [d, dCmp] = await Promise.all([
+      jfetch('/api/pnl-statement?' + Range.qs() + (force ? '&refresh=1' : '')),
+      cmpRange ? jfetch('/api/pnl-statement?start=' + cmpRange.start + '&end=' + cmpRange.end).catch(() => null) : Promise.resolve(null),
+    ]);
     if (!fresh()) return;
     stmtData = d;
+    if (dCmp) {
+      const fmt = (x) => new Date(x + 'T00:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+      renderCompare(d, dCmp, fmt(d.start) + ' – ' + fmt(d.end), fmt(dCmp.start) + ' – ' + fmt(dCmp.end));
+    } else {
+      $('cmpCard').style.display = 'none';
+    }
     let h = '';
     h += '<div class="section">Income</div>';
     h += row('Money in — bank-verified customer cash', d.income.moneyIn);
@@ -330,10 +456,11 @@ async function load(force) {
     if (d.income.invoicePayments) h += row('Invoice payments (bank-landed)', d.income.invoicePayments, 'sub', 'invoicePayments');
     if (d.income.salesReceipts) h += row('Sales receipts (bank-landed)', d.income.salesReceipts, 'sub', 'salesReceipts');
     if (d.income.refunds) h += row('Customer refunds', -d.income.refunds, 'sub', 'refunds');
+    if (d.income.feedRefunds) h += row('Less: customer refunds paid from the bank (PayPal, eBay…)', -d.income.feedRefunds, 'sub', 'feedRefunds');
     h += row('Less: sales tax remitted', -d.income.salesTaxRemitted, null, 'salesTax');
     h += row('Total income (net revenue)', d.income.netRevenue, 'total');
     h += '<div class="section">Cost of goods sold</div>';
-    h += row('Inventory purchases (cash, both locations)', d.cogs.inventoryCash, null, 'inventory');
+    h += row('Inventory purchases (cash actually paid — credits never count)', d.cogs.inventoryCash, null, 'inventory');
     if (d.adjusted) {
       h += row('Less: inventory ' + (d.adjusted.inventoryChange >= 0 ? 'increase' : 'decrease') +
         ' (counts ' + d.adjusted.beginAsOf + ' → ' + d.adjusted.endAsOf + ')', -d.adjusted.inventoryChange, 'sub', 'inventoryChange');
@@ -360,6 +487,19 @@ async function load(force) {
       div.textContent = '⚠ ' + warn;
       w.appendChild(div);
     }
+    // Timing context: cost lands when bills are PAID (Chris's rule), so when
+    // billed and paid amounts differ a lot in a range, say so plainly.
+    if (d.cogs.bookedReference) {
+      const gap = d.cogs.bookedReference - d.cogs.inventoryCash;
+      if (Math.abs(gap) > 100000) {
+        const div = document.createElement('div');
+        div.textContent = 'ℹ Bills received in this range total ' + usd.format(d.cogs.bookedReference) +
+          ' vs ' + usd.format(d.cogs.inventoryCash) + ' cash paid. Cost follows the payment date (your rule), so ' +
+          usd.format(Math.abs(gap)) + ' of cost ' + (gap > 0 ? 'will land when those bills get paid' : 'in this range belongs to bills from an earlier period') +
+          ' — profit shifts between periods by timing and smooths out over longer ranges.';
+        w.appendChild(div);
+      }
+    }
     const rows = $('expRows');
     rows.innerHTML = '';
     for (const e of d.expenses.rows || []) {
@@ -367,7 +507,10 @@ async function load(force) {
       tr.innerHTML = '<td>' + escapeHtml(e.name) + (e.id ? '' : '<span class="detail">summary row</span>') + '</td><td class="num">' + usd2.format(e.amount) + '</td>';
       if (e.id) {
         tr.className = 'exp-click';
-        tr.addEventListener('click', () => openExpenseDetail(e.id, e.name, e.amount));
+        tr.addEventListener('click', () => {
+          if (!attachDrawer(tr)) return; // toggle closed on second click
+          openExpenseDetail(e.id, e.name, e.amount);
+        });
       }
       rows.appendChild(tr);
     }
@@ -416,14 +559,16 @@ async function saveCount() {
 }
 
 async function init() {
-  mountRange((force) => { $('detailCard').style.display = 'none'; dState = null; detailSeq++; load(force); });
+  cmpSetup();
+  mountRange((force) => { parkDrawer(); load(force); });
   $('icSave').addEventListener('click', saveCount);
-  $('dClose').addEventListener('click', () => { $('detailCard').style.display = 'none'; dState = null; detailSeq++; });
+  $('dClose').addEventListener('click', parkDrawer);
   $('dCsv').addEventListener('click', downloadCsv);
   $('dBack').addEventListener('click', goBack);
   $('stmt').addEventListener('click', (e) => {
     const el = e.target.closest('.srow.click');
     if (!el) return;
+    if (!attachDrawer(el)) return; // second click on the same row folds it up
     if (el.dataset.key === 'expensesBooks') openExpenseBreakdown();
     else openDetail(el.dataset.key, el.dataset.label.replace(/&amp;/g, '&'));
   });

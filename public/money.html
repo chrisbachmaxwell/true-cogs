@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Where the Money Went · Pictureline</title>
+<link rel="stylesheet" href="/theme.css">
+<style>
+  /* viz roles — light, then dark under the same media query theme.css uses */
+  :root{
+    --viz-bank:#2a78d6; --viz-inv:#008300; --viz-own:#e87ba4; --viz-cap:#eda100;
+    --viz-fin:#1baf7a; --viz-oth:#eb6834; --viz-total:#8e8e93; --viz-warn:#fab219;
+    --viz-grid:#e5e5ea; --viz-ink:#1d1d1f; --viz-ink2:#6e6e73;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --viz-bank:#3987e5; --viz-inv:#008300; --viz-own:#d55181; --viz-cap:#c98500;
+      --viz-fin:#199e70; --viz-oth:#d95926; --viz-total:#8e8e93; --viz-warn:#fab219;
+      --viz-grid:#3a3a3c; --viz-ink:#f5f5f7; --viz-ink2:#98989d;
+    }
+  }
+  .kpis3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:18px 0}
+  @media(max-width:640px){.kpis3{grid-template-columns:1fr}}
+  .hero{font-size:34px;font-weight:700}
+  .ringwrap{display:flex;align-items:center;gap:14px}
+  .ringpct{font-size:22px;font-weight:700}
+  .story{font-size:15px;line-height:1.9;color:var(--viz-ink);margin:4px 0 2px}
+  .story .k{white-space:nowrap}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin:0 4px 1px 2px;vertical-align:middle}
+  .wfwrap{overflow-x:auto}
+  .wf{width:100%;min-width:640px;height:auto;display:block}
+  .wf text{font-family:inherit}
+  .wf .cap{font-size:12px;font-weight:600;fill:var(--viz-ink)}
+  .wf .axis{font-size:11.5px;fill:var(--viz-ink2)}
+  .wf .conn{stroke:var(--viz-grid);stroke-width:1}
+  .wf .hit{cursor:pointer}
+  #tip{position:fixed;display:none;background:var(--surface);border:1px solid var(--hairline);border-radius:10px;
+    box-shadow:0 6px 24px rgba(0,0,0,.12);padding:8px 12px;font-size:12.5px;pointer-events:none;z-index:50;max-width:260px}
+  #tip .t-amt{font-weight:700;font-size:14px}
+  .cat{margin-top:20px;scroll-margin-top:80px}
+  .cat h2{display:flex;justify-content:space-between;align-items:baseline}
+  .cat h2 .num{font-variant-numeric:tabular-nums}
+  .catnote{color:var(--viz-ink2);font-size:13px;margin:2px 0 10px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  td,th{padding:7px 10px;border-bottom:1px solid var(--hairline);text-align:left}
+  .num{text-align:right;font-variant-numeric:tabular-nums}
+  .neg{color:var(--bad)}
+  tr.acct-click{cursor:pointer}
+  tr.acct-click:hover{background:rgba(125,125,125,.06)}
+  tr.acct-click.open td:first-child::before{content:'▾ '}
+  tr.acct-click:not(.open) td:first-child::before{content:'▸ ';color:var(--viz-ink2)}
+  .excluded{opacity:.68}
+  tr.drawer > td{padding:0;border-bottom:1px solid var(--hairline)}
+  .drawer-inner{background:var(--surface-2);border-radius:10px;margin:8px 6px 12px;padding:10px 12px}
+  .drawer-scroll{max-height:420px;overflow:auto}
+  .drawer-inner table{font-size:12.5px}
+  .drawer-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap}
+  .drawer-note{color:var(--viz-ink2);font-size:12px;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="topbar"><div class="topbar-inner">
+  <a class="brand" href="/">Pictureline <span>Cash Reports</span></a>
+  <a class="crumb" id="backLink" href="/">← All reports</a>
+  <div class="spacer"></div>
+  <a class="crumb" href="/auth/logout">Sign out</a>
+</div></div>
+
+<div class="wrap">
+  <h1 class="title">Where the Money Went</h1>
+  <p class="subtitle">Every dollar of profit traced to where it sits · click a bar or account for the transactions behind it · <span id="rangeLabel"></span></p>
+  <div id="rangeBox"></div>
+  <div class="banner" id="banner"></div>
+
+  <div class="kpis3">
+    <div class="kpi"><div class="k-label">Profit claimed (P&amp;L)</div><div class="hero" id="kNoi">—</div><div class="k-note" id="kBasis"></div></div>
+    <div class="kpi"><div class="k-label">Traced to real places</div>
+      <div class="ringwrap">
+        <svg width="64" height="64" viewBox="0 0 64 64" aria-hidden="true">
+          <circle cx="32" cy="32" r="27" fill="none" stroke="var(--viz-grid)" stroke-width="7"/>
+          <circle id="ring" cx="32" cy="32" r="27" fill="none" stroke="var(--viz-bank)" stroke-width="7"
+            stroke-linecap="round" stroke-dasharray="0 169.6" transform="rotate(-90 32 32)"/>
+        </svg>
+        <div><div class="ringpct" id="kPct">—</div><div class="k-note" id="kAcc"></div></div>
+      </div>
+    </div>
+    <div class="kpi"><div class="k-label">Not yet traceable</div><div class="hero" id="kRes">—</div><div class="k-note" id="kResNote">Shrinks as the broken accounts get repaired</div></div>
+  </div>
+
+  <div class="card">
+    <div class="story" id="story"></div>
+    <div class="wfwrap"><svg id="wf" class="wf" role="img" aria-label="Waterfall: profit distributed to its destinations"></svg></div>
+  </div>
+
+  <div id="cats"></div>
+</div>
+<div id="tip"></div>
+
+<script src="/app.js"></script>
+<script>
+let mapData = null;
+const QBO_PATH = { Bill: 'bill', Purchase: 'expense', Check: 'check', Deposit: 'deposit',
+  BillPayment: 'billpayment', JournalEntry: 'journal', VendorCredit: 'vendorcredit' };
+function qboLink(type, id) {
+  const p = QBO_PATH[type];
+  return p && id ? 'https://qbo.intuit.com/app/' + p + '?txnId=' + encodeURIComponent(id) : null;
+}
+const CAT_STYLE = {
+  banks:     { color: 'var(--viz-bank)', short: 'Bank' },
+  inventory: { color: 'var(--viz-inv)',  short: 'Shelves' },
+  owners:    { color: 'var(--viz-own)',  short: 'Owners' },
+  capex:     { color: 'var(--viz-cap)',  short: 'Building' },
+  financing: { color: 'var(--viz-fin)',  short: 'Cards & dues' },
+  other:     { color: 'var(--viz-oth)',  short: 'Other' },
+};
+const fmtK = (v) => {
+  const a = Math.abs(v);
+  const s = a >= 995000 ? '$' + (a / 1e6).toFixed(2) + 'M' : a >= 1000 ? '$' + Math.round(a / 1000) + 'K' : '$' + Math.round(a);
+  return (v < 0 ? '−' : '') + s;
+};
+
+function renderStory(d) {
+  if (!d.noi || d.noi <= 0) { $('story').innerHTML = ''; return; }
+  const parts = [];
+  for (const c of d.categories) {
+    if (!c.inProof || !CAT_STYLE[c.key]) continue;
+    const per100 = (c.total / d.noi) * 100;
+    if (Math.abs(per100) < 0.5) continue;
+    const st = CAT_STYLE[c.key];
+    const verb = { banks: 'stayed in the bank', inventory: 'became inventory', owners: 'went to the owners',
+      capex: 'built the store', financing: per100 >= 0 ? 'paid old dues' : 'was lent by cards & vendors',
+      other: 'moved elsewhere' }[c.key];
+    parts.push('<span class="k"><span class="dot" style="background:' + st.color + '"></span><strong>$' +
+      Math.abs(per100).toFixed(0) + '</strong> ' + verb + '</span>');
+  }
+  const resPer = (d.residual / d.noi) * 100;
+  if (Math.abs(resPer) >= 0.5) parts.push('<span class="k"><span class="dot" style="background:var(--viz-warn)"></span><strong>$' + Math.abs(resPer).toFixed(0) + '</strong> ' + (resPer >= 0 ? 'not yet traceable ⚠' : 'over-traced') + '</span>');
+  $('story').innerHTML = '<strong>Of every $100 of profit:</strong> &nbsp;' + parts.join(' &nbsp;·&nbsp; ');
+}
+
+function renderWaterfall(d) {
+  const svg = $('wf');
+  const steps = [{ key: '_total', label: 'Profit', amount: d.noi, color: 'var(--viz-total)', from: 0, to: d.noi }];
+  let run = d.noi;
+  for (const c of d.categories) {
+    if (!c.inProof || !CAT_STYLE[c.key]) continue;
+    steps.push({ key: c.key, label: CAT_STYLE[c.key].short, amount: c.total, color: CAT_STYLE[c.key].color,
+      from: run - c.total, to: run, note: c.label });
+    run -= c.total;
+  }
+  steps.push({ key: '_res', label: 'Untraced ⚠', amount: run, color: 'var(--viz-warn)', from: 0, to: run,
+    note: 'Lives behind the broken accounts until they’re repaired' });
+
+  const W = 900, H = 330, mL = 8, mR = 8, mT = 30, mB = 26;
+  const plotW = W - mL - mR, plotH = H - mT - mB;
+  const maxV = Math.max(...steps.map((s) => Math.max(s.from, s.to)), d.noi) * 1.02;
+  const minV = Math.min(0, ...steps.map((s) => Math.min(s.from, s.to)));
+  const y = (v) => mT + plotH * (1 - (v - minV) / (maxV - minV));
+  const band = plotW / steps.length, barW = 24;
+  let els = '';
+  // baseline
+  els += '<line x1="' + mL + '" y1="' + y(0) + '" x2="' + (W - mR) + '" y2="' + y(0) + '" stroke="var(--viz-grid)" stroke-width="1"/>';
+  steps.forEach((s, i) => {
+    const cx = mL + band * i + band / 2, x = cx - barW / 2;
+    const top = y(Math.max(s.from, s.to)), bot = y(Math.min(s.from, s.to));
+    const h = Math.max(bot - top, 2), r = Math.min(4, h / 2);
+    // rounded top, square bottom
+    const path = 'M' + x + ' ' + bot + ' L' + x + ' ' + (top + r) + ' Q' + x + ' ' + top + ' ' + (x + r) + ' ' + top +
+      ' L' + (x + barW - r) + ' ' + top + ' Q' + (x + barW) + ' ' + top + ' ' + (x + barW) + ' ' + (top + r) +
+      ' L' + (x + barW) + ' ' + bot + ' Z';
+    els += '<path d="' + path + '" fill="' + s.color + '"/>';
+    // connector at the running level, from this bar's edge to the next bar's edge
+    if (i < steps.length - 1) {
+      const level = y(s.key === '_total' ? s.to : s.from);
+      const nextLeft = mL + band * (i + 1) + band / 2 - barW / 2;
+      els += '<line class="conn" x1="' + (x + barW) + '" y1="' + level + '" x2="' + nextLeft + '" y2="' + level + '"/>';
+    }
+    els += '<text class="cap" x="' + cx + '" y="' + (top - 7) + '" text-anchor="middle">' + fmtK(s.amount) + '</text>';
+    els += '<text class="axis" x="' + cx + '" y="' + (H - 8) + '" text-anchor="middle">' + s.label + '</text>';
+    els += '<rect class="hit" data-i="' + i + '" x="' + (mL + band * i) + '" y="' + mT + '" width="' + band + '" height="' + (plotH + mB) + '" fill="transparent"/>';
+  });
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+  svg.innerHTML = els;
+  const tip = $('tip');
+  svg.querySelectorAll('.hit').forEach((r) => {
+    const s = steps[Number(r.dataset.i)];
+    r.addEventListener('mousemove', (e) => {
+      tip.style.display = 'block';
+      tip.style.left = Math.min(e.clientX + 14, window.innerWidth - 280) + 'px';
+      tip.style.top = (e.clientY + 14) + 'px';
+      tip.innerHTML = '<div>' + escapeHtml(s.note || (s.key === '_total' ? 'Net operating income for this range' : s.label)) + '</div>' +
+        '<div class="t-amt">' + usd.format(s.amount) + '</div>' +
+        (s.key !== '_total' && s.key !== '_res' ? '<div class="hint">click to see the accounts</div>' : '');
+    });
+    r.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+    r.addEventListener('click', () => {
+      const target = document.getElementById('cat-' + s.key);
+      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  });
+}
+
+async function load(force) {
+  const fresh = staleGuard();
+  setLoading(true);
+  try {
+    const d = await jfetch('/api/money-map?' + Range.qs() + (force ? '&refresh=1' : ''));
+    if (!fresh()) return;
+    mapData = d;
+    $('kNoi').textContent = usd.format(d.noi);
+    $('kBasis').textContent = d.basis;
+    const pct = d.noi ? Math.max(0, Math.min(1, d.accounted / d.noi)) : 0;
+    $('kPct').textContent = Math.round(pct * 100) + '%';
+    $('kAcc').textContent = usd.format(d.accounted) + ' traced';
+    const ring = $('ring');
+    const CIRC = 2 * Math.PI * 27;
+    ring.setAttribute('stroke-dasharray', (pct * CIRC).toFixed(1) + ' ' + CIRC.toFixed(1));
+    ring.setAttribute('stroke', pct >= 0.85 ? 'var(--viz-bank)' : 'var(--viz-warn)');
+    $('kRes').textContent = usd.format(d.residual);
+    renderStory(d);
+    renderWaterfall(d);
+
+    let h = '';
+    for (const c of d.categories) {
+      const st = CAT_STYLE[c.key];
+      const excluded = !c.inProof;
+      h += '<div class="card cat' + (excluded ? ' excluded' : '') + '" id="cat-' + c.key + '"><h2>' +
+        (st ? '<span><span class="dot" style="background:' + st.color + '"></span>' + escapeHtml(c.label) + '</span>' : '<span>' + escapeHtml(c.label) + '</span>') +
+        '<span class="num">' + (excluded ? '' : usd.format(c.total)) + '</span></h2>' +
+        (c.note ? '<div class="catnote">' + escapeHtml(c.note) + '</div>' : '') +
+        '<div style="overflow-x:auto"><table><thead><tr><th>Account</th><th class="num">Start</th><th class="num">End</th><th class="num">' +
+        (excluded ? 'Moved' : 'Profit parked') + '</th></tr></thead><tbody>';
+      for (const a of c.accounts) {
+        const amt = c.inProof ? a.amount : a.change;
+        const clickable = a.id !== null && a.type !== 'Counts';
+        // A null balance means "no reliable book balance for this account"
+        // (the repaired-but-still-broken card registers) — show a dash, never
+        // a misleading $0.00.
+        const bal = (v) => (v === null || v === undefined ? '<span class="hint">—</span>' : usd.format(v));
+        h += '<tr' + (clickable ? ' class="acct-click" data-id="' + a.id + '" data-name="' + escapeHtml(a.name) + '"' : '') + '>' +
+          '<td>' + escapeHtml(a.name) + (a.detail ? ' <span class="hint">' + escapeHtml(a.detail) + '</span>' : '') + '</td>' +
+          '<td class="num">' + bal(a.before) + '</td><td class="num">' + bal(a.after) + '</td>' +
+          '<td class="num' + (amt < 0 ? ' neg' : '') + '">' + usd.format(amt) + '</td></tr>';
+      }
+      h += '</tbody></table></div></div>';
+    }
+    $('cats').innerHTML = h;
+    if (d.countWarning) showBanner('<strong>Heads up.</strong> ' + escapeHtml(d.countWarning));
+    document.querySelectorAll('.acct-click').forEach((tr) => {
+      tr.addEventListener('click', () => toggleAccount(tr, tr.dataset.id, tr.dataset.name));
+    });
+  } catch (err) {
+    if (err.message !== 'signed out') showBanner('<strong>Error.</strong> ' + escapeHtml(err.message));
+  } finally { setLoading(false); }
+  $('backLink').href = linkWithRange('/');
+}
+
+// Inline drawer: expands directly under the clicked account row; clicking the
+// row again (or the Close button) folds it back up. One drawer per row.
+function closeDrawer(tr) {
+  tr.classList.remove('open');
+  const next = tr.nextElementSibling;
+  if (next && next.classList.contains('drawer')) next.remove();
+}
+
+async function toggleAccount(tr, id, name) {
+  if (tr.classList.contains('open')) { closeDrawer(tr); return; }
+  tr.classList.add('open');
+  const drawer = document.createElement('tr');
+  drawer.className = 'drawer';
+  const cols = tr.children.length;
+  drawer.innerHTML = '<td colspan="' + cols + '"><div class="drawer-inner">' +
+    '<div class="drawer-bar"><strong>' + escapeHtml(name) + ' — transactions in this range</strong>' +
+    '<span><button class="btn btn-csv">Download CSV</button> <button class="btn btn-close">Close ▲</button></span></div>' +
+    '<div class="drawer-scroll"><table><thead><tr><th>Date</th><th>Who / what</th><th>Type</th><th class="num">Amount</th><th>Detail</th></tr></thead>' +
+    '<tbody><tr><td colspan="5" class="empty">Loading…</td></tr></tbody></table></div>' +
+    '<div class="drawer-note"></div></div></td>';
+  tr.after(drawer);
+  const tbody = drawer.querySelector('tbody');
+  const note = drawer.querySelector('.drawer-note');
+  let rowsData = [];
+  drawer.querySelector('.btn-close').addEventListener('click', () => closeDrawer(tr));
+  drawer.querySelector('.btn-csv').addEventListener('click', () => {
+    if (!rowsData.length) return;
+    const esc = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    const lines = ['Date,Name,Type,Amount,Detail'];
+    for (const r of rowsData) lines.push([r.date, r.name, r.txnType, r.amount, r.detail || ''].map(esc).join(','));
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name.replace(/[^\w]+/g, '-').toLowerCase() + '.csv';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+  try {
+    const r = Range.get();
+    const d = await jfetch('/api/expense-detail?account=' + encodeURIComponent(id) + '&start=' + r.start + '&end=' + r.end);
+    rowsData = d.rows || [];
+    if (!rowsData.length) {
+      tbody.innerHTML = '<tr><td colspan="5" class="empty">No API-visible transactions — this account moved via payroll or other activity QuickBooks does not expose. The balance change is still real; verify it in QuickBooks directly.</td></tr>';
+      return;
+    }
+    let h = '';
+    for (const row of rowsData) {
+      const link = qboLink(row.txnType, row.txnId);
+      h += '<tr><td>' + row.date + '</td><td>' + escapeHtml(row.name) + '</td><td>' +
+        (link ? '<a href="' + link + '" target="_blank">' + row.txnType + '</a>' : row.txnType) + '</td>' +
+        '<td class="num' + (row.amount < 0 ? ' neg' : '') + '">' + usd2.format(row.amount) + '</td>' +
+        '<td class="hint">' + escapeHtml(row.detail || '') + '</td></tr>';
+    }
+    tbody.innerHTML = h;
+    note.textContent = 'Sum of listed transactions: ' + usd2.format(d.sum) +
+      '. If this differs from the balance change above, the gap is payroll/tax-center activity the API can’t show.';
+  } catch (err) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty">' + escapeHtml(err.message) + '</td></tr>';
+  }
+}
+
+async function init() {
+  mountRange((force) => load(force));
+  if (await checkStatus()) load(false);
+}
+init();
+</script>
+</body>
+</html>

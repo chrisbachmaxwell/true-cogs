@@ -1,0 +1,9 @@
+{
+  "task": "card-autopay-credits-2026-purple",
+  "description": "AX Purple's own AUTOPAY records (credit-card credits funded from AX Purple) whose category also points at AX Purple, so each one cancels itself and the register never shows the paydown. The matching bank-side Zions payments (56551, 58015, 59439) are already in the Credit Cards wash; re-pointing these categories at the wash records each paydown once and nets the wash to zero.",
+  "rows": [
+    { "txnId": "56733", "expectedAmount": 37645.22 },
+    { "txnId": "57898", "expectedAmount": 27402.55 },
+    { "txnId": "59488", "expectedAmount": 20000 }
+  ]
+}

@@ -144,6 +144,10 @@ export async function computeBankFlow(
       transfersIn += amt;
     }
   }
+  // Dedicated pay-down-card transactions funded from a bank account.
+  for (const ccp of await api.queryByDateRange('CreditCardPayment', startDate, endDate)) {
+    if (toBank(ccp.BankAccountRef)) transfersToCards += Number(ccp.Amount) || 0;
+  }
   const inflowsTotal = round2(depositsIn + directSr + directPay + transfersIn);
   const outflowsTotal = round2(bpTotal + purchTotal + refundsOut + transfersToCards + transfersOutOther);
   const netCategorized = round2(inflowsTotal - outflowsTotal);
@@ -187,4 +191,92 @@ export async function computeBankFlow(
     uncategorized,
     warnings,
   };
+}
+
+// ---- Per-line transaction detail for the bank report's inline drawers ----
+// Uses the SAME predicates as computeBankFlow so every drawer sums to its line.
+
+export interface BankFlowRow {
+  date: string;
+  name: string;
+  txnType: string;
+  txnId: string | null;
+  amount: number;
+  detail?: string;
+}
+
+export async function bankFlowDetail(
+  api: QboApi,
+  bankAccountIds: string[],
+  line: string,
+  startDate: string,
+  endDate: string
+): Promise<{ rows: BankFlowRow[]; sum: number }> {
+  const bankIds = new Set(bankAccountIds);
+  const toBank = (ref: any) => bankIds.has(ref?.value);
+  const rows: BankFlowRow[] = [];
+  const push = (date: string, name: string, txnType: string, txnId: any, amount: number, detail?: string) => {
+    rows.push({ date, name, txnType, txnId: txnId ? String(txnId) : null, amount: round2(amount), detail });
+  };
+
+  if (line === 'deposits') {
+    for (const d of await api.queryByDateRange('Deposit', startDate, endDate)) {
+      if (!toBank(d.DepositToAccountRef)) continue;
+      push(d.TxnDate, d.PrivateNote || 'Deposit', 'Deposit', d.Id, Number(d.TotalAmt) || 0);
+    }
+  } else if (line === 'direct') {
+    for (const t of await api.queryByDateRange('SalesReceipt', startDate, endDate)) {
+      if (!toBank(t.DepositToAccountRef)) continue;
+      push(t.TxnDate, t.CustomerRef?.name || 'Sales receipt', 'SalesReceipt', t.Id, Number(t.TotalAmt) || 0);
+    }
+    for (const t of await api.queryByDateRange('Payment', startDate, endDate)) {
+      if (!toBank(t.DepositToAccountRef)) continue;
+      push(t.TxnDate, t.CustomerRef?.name || 'Invoice payment', 'Payment', t.Id, Number(t.TotalAmt) || 0);
+    }
+  } else if (line === 'transfersIn' || line === 'transfersOut') {
+    for (const t of await api.queryByDateRange('Transfer', startDate, endDate)) {
+      const from = toBank(t.FromAccountRef);
+      const to = toBank(t.ToAccountRef);
+      if (from && to) continue;
+      if (line === 'transfersIn' && !from && to) {
+        push(t.TxnDate, 'From ' + (t.FromAccountRef?.name || 'other account'), 'Transfer', t.Id, Number(t.Amount) || 0);
+      }
+      if (line === 'transfersOut' && from && !to) {
+        push(t.TxnDate, 'To ' + (t.ToAccountRef?.name || 'other account'), 'Transfer', t.Id, Number(t.Amount) || 0);
+      }
+    }
+    if (line === 'transfersOut') {
+      for (const ccp of await api.queryByDateRange('CreditCardPayment', startDate, endDate)) {
+        if (!toBank(ccp.BankAccountRef)) continue;
+        push(ccp.TxnDate, 'Card payment — ' + (ccp.CreditCardAccountRef?.name || 'credit card'), 'CreditCardPayment', ccp.Id, Number(ccp.Amount) || 0);
+      }
+      rows.sort((a, b) => a.date.localeCompare(b.date));
+    }
+  } else if (line === 'billPayments') {
+    for (const bp of await api.queryByDateRange('BillPayment', startDate, endDate)) {
+      if (bp.PayType !== 'Check') continue;
+      const fundingRef = bp.CheckPayment?.BankAccountRef;
+      if (fundingRef && !toBank(fundingRef)) continue;
+      const amt = Number(bp.TotalAmt) || 0;
+      if (amt === 0) continue;
+      push(bp.TxnDate, bp.VendorRef?.name || 'Unknown vendor', 'BillPayment', bp.Id, amt);
+    }
+  } else if (line === 'purchases') {
+    for (const p of await api.queryByDateRange('Purchase', startDate, endDate)) {
+      if (!toBank(p.AccountRef)) continue;
+      const sign = p.Credit === true ? -1 : 1;
+      push(p.TxnDate, p.EntityRef?.name || 'Unknown payee', 'Purchase', p.Id, sign * (Number(p.TotalAmt) || 0),
+        p.Credit === true ? 'Refund/credit-back' : undefined);
+    }
+  } else if (line === 'refunds') {
+    for (const t of await api.queryByDateRange('RefundReceipt', startDate, endDate)) {
+      if (!toBank(t.DepositToAccountRef)) continue;
+      push(t.TxnDate, t.CustomerRef?.name || 'Customer refund', 'RefundReceipt', t.Id, Number(t.TotalAmt) || 0);
+    }
+  } else {
+    throw Object.assign(new Error(`Unknown bank-flow line "${line}"`), { statusCode: 400 });
+  }
+
+  rows.sort((a, b) => a.date.localeCompare(b.date));
+  return { rows, sum: round2(rows.reduce((s, r) => s + r.amount, 0)) };
 }

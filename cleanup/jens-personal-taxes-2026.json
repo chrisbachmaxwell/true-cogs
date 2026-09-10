@@ -1,0 +1,8 @@
+{
+  "task": "jens-personal-taxes-2026",
+  "description": "Jens Nielsen's PERSONAL IRS payments (memo: JENS B & ELIZABETH NIE) coded to the company's Federal W/H Tax Payable account. 56368 is the 2026-04-15 payment ($58,000, the 1040 balance-due date) and 59437 the 2026-06-16 payment ($67,000, the Q2 1040-ES date). Both move to Federal Estimated Tax (1040-ES), the account the accountant already uses for personal tax prepayments, where the money map counts them as money to the owners.",
+  "rows": [
+    { "txnId": "56368", "expectedAmount": 58000 },
+    { "txnId": "59437", "expectedAmount": 67000 }
+  ]
+}

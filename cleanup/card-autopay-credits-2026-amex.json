@@ -1,0 +1,7 @@
+{
+  "task": "card-autopay-credits-2026-amex",
+  "description": "The PLATINUM Amex 2026-06-02 AUTOPAY record (memo XXXX3005, a credit funded from the Platinum card) whose category was set to AX Purple instead of the Credit Cards wash — inflating AX Purple's balance by $106,264.84 with money that actually paid the Platinum card. The matching bank-side Zions payment (58900) is already in the wash.",
+  "rows": [
+    { "txnId": "58833", "expectedAmount": 106264.84 }
+  ]
+}

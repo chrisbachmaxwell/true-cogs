@@ -7,6 +7,8 @@ import { QboApi } from './qbo';
 // the uses list.
 
 export interface AccountMove {
+  /** QBO account id — lets the UI drill into the account's transactions. */
+  id: string;
   name: string;
   acctNum: string | null;
   type: string;
@@ -86,6 +88,7 @@ export async function computeCashFlow(
     if (/retained earnings|net income/i.test(name)) continue; // the source side
     const isLiabEq = LIABILITY_OR_EQUITY.has(type);
     const move: AccountMove = {
+      id: String(id),
       name,
       acctNum: acct?.AcctNum ?? null,
       type,

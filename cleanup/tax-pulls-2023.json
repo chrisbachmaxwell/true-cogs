@@ -1,0 +1,102 @@
+{
+ "description": "2023 Utah tax remittances mis-filed in 66000 Payroll Expenses (Chris scoped automation to 2023 only, 2026-07-16). Big month-end payments -> Sales Tax Payable 21900 per his Option-1 decision; small monthly -> State Tax W/H Payable. All judgment rows absent.",
+ "from": "66000",
+ "rows": [
+  {
+   "txnId": "8677",
+   "expectedAmount": 30421.64,
+   "to": "21900",
+   "note": "2023-02-01 Utah tax pull"
+  },
+  {
+   "txnId": "8669",
+   "expectedAmount": 94464.74,
+   "to": "21900",
+   "note": "2023-02-01 Utah tax pull"
+  },
+  {
+   "txnId": "9443",
+   "expectedAmount": 5405.8,
+   "to": "State Tax W/H Payable",
+   "note": "2023-02-27 Utah tax pull"
+  },
+  {
+   "txnId": "9492",
+   "expectedAmount": 58751.27,
+   "to": "21900",
+   "note": "2023-02-28 Utah tax pull"
+  },
+  {
+   "txnId": "10794",
+   "expectedAmount": 5252.86,
+   "to": "State Tax W/H Payable",
+   "note": "2023-03-31 Utah tax pull"
+  },
+  {
+   "txnId": "10871",
+   "expectedAmount": 56915.58,
+   "to": "21900",
+   "note": "2023-04-04 Utah tax pull"
+  },
+  {
+   "txnId": "14931",
+   "expectedAmount": 2857.36,
+   "to": "State Tax W/H Payable",
+   "note": "2023-06-29 Utah tax pull"
+  },
+  {
+   "txnId": "17274",
+   "expectedAmount": 4682.83,
+   "to": "State Tax W/H Payable",
+   "note": "2023-08-30 Utah tax pull"
+  },
+  {
+   "txnId": "17333",
+   "expectedAmount": 70322.32,
+   "to": "21900",
+   "note": "2023-08-31 Utah tax pull"
+  },
+  {
+   "txnId": "18285",
+   "expectedAmount": 5243.8,
+   "to": "State Tax W/H Payable",
+   "note": "2023-09-26 Utah tax pull"
+  },
+  {
+   "txnId": "18524",
+   "expectedAmount": 66929.19,
+   "to": "21900",
+   "note": "2023-10-02 Utah tax pull"
+  },
+  {
+   "txnId": "19650",
+   "expectedAmount": 6689.41,
+   "to": "State Tax W/H Payable",
+   "note": "2023-10-26 Utah tax pull"
+  },
+  {
+   "txnId": "19815",
+   "expectedAmount": 81055.69,
+   "to": "21900",
+   "note": "2023-10-31 Utah tax pull"
+  },
+  {
+   "txnId": "20837",
+   "expectedAmount": 6058.74,
+   "to": "State Tax W/H Payable",
+   "note": "2023-11-28 Utah tax pull"
+  },
+  {
+   "txnId": "20998",
+   "expectedAmount": 63591.06,
+   "to": "21900",
+   "note": "2023-11-30 Utah tax pull"
+  },
+  {
+   "txnId": "22029",
+   "expectedAmount": 5238.02,
+   "to": "State Tax W/H Payable",
+   "note": "2023-12-27 Utah tax pull"
+  }
+ ]
+}
