@@ -56,7 +56,7 @@ test('mixed lines: only inventory lines move, others untouched', () => {
 test('refuses: wrong funding account (the Amex case Chris caught)', () => {
   const p = planReclassify(purchase({ AccountRef: { value: 'amex' } }), CFG);
   assert.equal(p.ok, false);
-  assert.match(p.reason, /not paid from Zions/);
+  assert.match(p.reason, /not paid from the expected funding account/);
 });
 
 test('refuses: no source-coded lines (the employee-loan case Chris caught)', () => {
@@ -87,6 +87,26 @@ test('refuses: credits, missing txn, missing SyncToken', () => {
   assert.equal(planReclassify(purchase({ Credit: true }), CFG).ok, false);
   assert.equal(planReclassify(null, CFG).ok, false);
   assert.equal(planReclassify(purchase({ SyncToken: undefined }), CFG).ok, false);
+});
+
+test('allowCredit: card-side autopay credit re-pointed at the wash', () => {
+  // The 2026 autopay-record repair: a credit funded from the card itself,
+  // category also the card — allowCredit + fundedFrom=the card lets it through.
+  const cfg = { zionsId: 'purple', toId: 'wash', toName: 'Credit Cards', fromIds: new Set(['purple']), expectedAmount: 500, allowCredit: true };
+  const p = planReclassify(
+    purchase({ Credit: true, AccountRef: { value: 'purple' }, Line: [{ DetailType: 'AccountBasedExpenseLineDetail', Amount: 500, AccountBasedExpenseLineDetail: { AccountRef: { value: 'purple' } } }] }),
+    cfg
+  );
+  assert.equal(p.ok, true);
+  assert.equal(p.updated.Line[0].AccountBasedExpenseLineDetail.AccountRef.value, 'wash');
+  assert.equal(p.updated.Credit, true); // the credit flag itself is untouched
+});
+
+test('allowCredit still enforces the funding account', () => {
+  const cfg = { zionsId: 'purple', toId: 'wash', toName: 'Credit Cards', fromIds: new Set(['purple']), expectedAmount: 500, allowCredit: true };
+  const p = planReclassify(purchase({ Credit: true, AccountRef: { value: 'zions' } }), cfg);
+  assert.equal(p.ok, false);
+  assert.match(p.reason, /not paid from the expected funding account/);
 });
 
 test('revert restores the before-image lines onto the live object', () => {

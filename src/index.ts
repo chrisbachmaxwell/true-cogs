@@ -2641,7 +2641,10 @@ interface BeltRow {
 
 /** Each cleanup task Chris has explicitly approved gets an entry here; the
  * endpoints refuse any unknown task name. */
-const CLEANUP_TASKS: Record<string, { file: string; from: 'inventory' | string; defaultTo?: string }> = {
+const CLEANUP_TASKS: Record<
+  string,
+  { file: string; from: 'inventory' | string; defaultTo?: string; fundedFrom?: string; allowCredit?: boolean }
+> = {
   'ach-belt': { file: 'ach-belt.json', from: 'inventory', defaultTo: 'ACH' },
   // Token is the account NUMBER: resolveAccounts matches AcctNum/Name exactly,
   // and the account's Name is just "Payroll Expenses".
@@ -2654,6 +2657,21 @@ const CLEANUP_TASKS: Record<string, { file: string; from: 'inventory' | string; 
   // payment counts once. Dollar-neutral between balance-sheet accounts.
   'card-payments-2025-26-amex': { file: 'card-payments-2025-26-amex.json', from: 'PLATINUM Amex Credit Card -009', defaultTo: 'Credit Cards' },
   'card-payments-2025-26-purple': { file: 'card-payments-2025-26-purple.json', from: 'AX Purple (64001)', defaultTo: 'Credit Cards' },
+  // 2026 money-map financing audit (Chris: "the credit card section seems weird
+  // to me and having federal taxes there is strange", 2026-09-10):
+  // Jens's PERSONAL IRS payments (1040 balance-due + 1040-ES) were coded to the
+  // company payroll-tax account; move them to the 1040-ES personal-tax account
+  // the accountant already uses, where the money map counts them as owner money.
+  'jens-personal-taxes-2026': { file: 'jens-personal-taxes-2026.json', from: '21002', defaultTo: '21005' },
+  // Card-side AUTOPAY records whose category points back at a card instead of
+  // the Credit Cards wash account. Three are AX Purple credits coded to AX
+  // Purple itself (a self-cancelling no-op), one is a PLATINUM Amex credit
+  // coded to AX Purple (inflating Purple's balance by $106k). Re-pointing the
+  // category at the wash makes each payment count once and zeroes the wash.
+  // These records are Credit Card CREDITS funded from the card, so the tasks
+  // carry fundedFrom + allowCredit; validation is otherwise unchanged.
+  'card-autopay-credits-2026-purple': { file: 'card-autopay-credits-2026-purple.json', from: 'AX Purple (64001)', defaultTo: 'Credit Cards', fundedFrom: 'AX Purple (64001)', allowCredit: true },
+  'card-autopay-credits-2026-amex': { file: 'card-autopay-credits-2026-amex.json', from: 'AX Purple (64001)', defaultTo: 'Credit Cards', fundedFrom: 'PLATINUM Amex Credit Card -009', allowCredit: true },
 };
 
 function loadBelt(task: string): BeltRow[] {
@@ -2680,8 +2698,15 @@ async function reclassifyCfg(api: QboApi, task: string, row: BeltRow) {
       ? new Set((await getTrackedAccounts(api)).map((t) => t.id))
       : new Set([(await resolveToken(api, spec.from)).id]);
   const to = await resolveToken(api, row.to ?? spec.defaultTo!);
-  const zions = await resolveToken(api, 'Zions Bank Checking (8882)');
-  return { zionsId: zions.id, toId: to.id, toName: to.name, fromIds, expectedAmount: row.expectedAmount };
+  const funding = await resolveToken(api, spec.fundedFrom ?? 'Zions Bank Checking (8882)');
+  return {
+    zionsId: funding.id,
+    toId: to.id,
+    toName: to.name,
+    fromIds,
+    expectedAmount: row.expectedAmount,
+    allowCredit: spec.allowCredit === true,
+  };
 }
 
 app.get(

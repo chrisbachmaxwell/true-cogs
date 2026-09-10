@@ -1,7 +1,14 @@
 {
- "task": "card-payments-2025-26-purple",
- "description": "2026 AX Purple register repair: one bank-side payment (2026-01-20) coded directly to the card while the card-side AUTOPAY record already reduces it. Recode to the Credit Cards wash account.",
- "rows": [
-  { "txnId": "52804", "expectedAmount": 34336.66 }
- ]
+  "task": "card-payments-2025-26-purple",
+  "description": "AX Purple register repair: bank-side payments coded directly to a card while the card-side record already carries (or should carry) the movement. 52804 (2026-01-20) was the original case. 54593 (2026-03-03, $67,918.03) is the March Zions payment coded to AX Purple even though the card-side record 54578 (memo XXXX3005) shows the money actually paid the PLATINUM Amex — recoding it to the Credit Cards wash removes a fake $67.9k paydown from AX Purple.",
+  "rows": [
+    {
+      "txnId": "52804",
+      "expectedAmount": 34336.66
+    },
+    {
+      "txnId": "54593",
+      "expectedAmount": 67918.03
+    }
+  ]
 }

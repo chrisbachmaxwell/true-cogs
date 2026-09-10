@@ -8,7 +8,8 @@
 // time; anything failing any check is skipped, never written.
 
 export interface ReclassifyConfig {
-  /** The real bank the pulls/wires came from (Zions checking). */
+  /** The account the transaction must be funded from — Zions checking for
+   * bank-side tasks, or the card itself for card-side autopay-record tasks. */
   zionsId: string;
   /** The account the matching lines move TO. */
   toId: string;
@@ -17,6 +18,9 @@ export interface ReclassifyConfig {
   fromIds: Set<string>;
   /** The from-coded amount the manifest expects on this transaction. */
   expectedAmount: number;
+  /** Card-side autopay records are credit-card CREDITS (they reduce the card),
+   * so tasks repairing them must opt in; every other task still refuses credits. */
+  allowCredit?: boolean;
 }
 
 export interface ReclassifyPlan {
@@ -37,9 +41,9 @@ export function planReclassify(purchase: any, cfg: ReclassifyConfig): Reclassify
   if (!purchase || !purchase.Id) return { ok: false, reason: 'transaction not found' };
   if (purchase.SyncToken === undefined) return { ok: false, reason: 'missing SyncToken' };
   if (String(purchase.AccountRef?.value) !== String(cfg.zionsId)) {
-    return { ok: false, reason: `not paid from Zions (paid from account ${purchase.AccountRef?.value})` };
+    return { ok: false, reason: `not paid from the expected funding account (paid from account ${purchase.AccountRef?.value})` };
   }
-  if (purchase.Credit === true) return { ok: false, reason: 'is a credit/refund' };
+  if (purchase.Credit === true && cfg.allowCredit !== true) return { ok: false, reason: 'is a credit/refund' };
 
   const lines = (purchase.Line || []).filter(
     (l: any) =>
