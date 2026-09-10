@@ -96,16 +96,57 @@ app.post(
 // Email-first: approved users type their email and get a one-time link.
 // Passwords stay as the fallback (and as the agent service account's path).
 
-const emailConfigured = () => Boolean(config.smtpHost || config.resendApiKey);
+const graphConfigured = () => Boolean(config.graphTenantId && config.graphClientId && config.graphClientSecret);
+const emailConfigured = () => Boolean(graphConfigured() || config.smtpHost || config.resendApiKey);
 
-/** Sends the sign-in link — via generic SMTP (Gmail/Microsoft 365/anything)
- * when configured, else the Resend API. Never logs the token. */
+// Client-credentials token for Microsoft Graph, cached until ~5 min before
+// expiry (the same app registration the careers/scheduling projects use).
+let graphToken: { value: string; exp: number } | null = null;
+async function getGraphToken(): Promise<string> {
+  if (graphToken && Date.now() < graphToken.exp) return graphToken.value;
+  const r = await fetch(`https://login.microsoftonline.com/${config.graphTenantId}/oauth2/v2.0/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'client_credentials',
+      client_id: config.graphClientId!,
+      client_secret: config.graphClientSecret!,
+      scope: 'https://graph.microsoft.com/.default',
+    }),
+  });
+  if (!r.ok) throw new Error(`Microsoft sign-in token request failed (HTTP ${r.status})`);
+  const d: any = await r.json();
+  graphToken = { value: d.access_token, exp: Date.now() + (Number(d.expires_in) - 300) * 1000 };
+  return graphToken.value;
+}
+
+/** Sends the sign-in link — Microsoft Graph first (the company's own mail),
+ * then generic SMTP, then the Resend API. Never logs the token. */
 async function sendLoginEmail(to: string, link: string): Promise<void> {
   const subject = 'Your Pictureline sign-in link';
   const html =
     `<p>Click to sign in to Pictureline Cash Reports:</p>` +
     `<p><a href="${link}" style="display:inline-block;background:#0a84ff;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px">Sign in</a></p>` +
     `<p style="color:#777;font-size:13px">This link works once and expires in 15 minutes. If you didn’t request it, you can ignore this email.</p>`;
+  if (graphConfigured()) {
+    // Graph sends as a real mailbox: strip any "Display Name <addr>" wrapper.
+    const from = (config.authFromEmail.match(/<([^>]+)>/)?.[1] || config.authFromEmail).trim();
+    const token = await getGraphToken();
+    const r = await fetch(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(from)}/sendMail`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: {
+          subject,
+          body: { contentType: 'HTML', content: html },
+          toRecipients: [{ emailAddress: { address: to } }],
+        },
+        saveToSentItems: false,
+      }),
+    });
+    if (!r.ok) throw new Error(`sign-in email could not be sent (Microsoft HTTP ${r.status})`);
+    return;
+  }
   if (config.smtpHost) {
     const nodemailer = await import('nodemailer');
     const transport = nodemailer.createTransport({

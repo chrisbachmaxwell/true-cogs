@@ -34,6 +34,11 @@ export interface AppConfig {
   /** Resend API key for magic-link sign-in emails (D36). Absent = email
    * sign-in offline; password sign-in always remains available. */
   resendApiKey: string | undefined;
+  /** Microsoft Graph sender (D36b) — same app registration the careers and
+   * scheduling projects use; preferred over SMTP/Resend when configured. */
+  graphTenantId: string | undefined;
+  graphClientId: string | undefined;
+  graphClientSecret: string | undefined;
   /** Generic SMTP (D36a) — works with Gmail app passwords, Microsoft 365,
    * or any mail provider; takes precedence over Resend when set. */
   smtpHost: string | undefined;
@@ -82,6 +87,9 @@ export const config: AppConfig = {
   agentPassword: process.env.AGENT_PASSWORD,
   agentIsAdmin: process.env.AGENT_IS_ADMIN === 'true',
   resendApiKey: process.env.RESEND_API_KEY,
+  graphTenantId: process.env.GRAPH_TENANT_ID,
+  graphClientId: process.env.GRAPH_CLIENT_ID,
+  graphClientSecret: process.env.GRAPH_CLIENT_SECRET,
   smtpHost: process.env.SMTP_HOST,
   smtpPort: Number(process.env.SMTP_PORT) || 587,
   smtpUser: process.env.SMTP_USER,
