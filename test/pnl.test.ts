@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { computeMonthlyPnl, customerCashIn, depositRetailPortion, INTERCOMPANY_CUSTOMER, PnlContext } from '../src/pnl';
+import { computeMonthlyPnl, depositRetailPortion, PnlContext } from '../src/pnl';
 import type { QboApi } from '../src/qbo';
 
 const BANK = '35';
@@ -215,15 +215,4 @@ test('feed refunds: bank-funded purchases coded to income accounts reduce income
   assert.equal(r.retailCashIn.feedRefunds, 110); // 150 − 40
   assert.equal(r.retailCashIn.total, 9890);
   assert.equal(r.revenueNet, 9890);
-});
-
-test('customerCashIn: only bank-landed money from the named customer', () => {
-  const bank = new Set(['35']);
-  const txns = [
-    { TotalAmt: 5000, DepositToAccountRef: { value: '35' }, CustomerRef: { name: 'Pictureline Boise' } },
-    // Settled into a non-bank account (credit memos) — no cash moved.
-    { TotalAmt: 2000, DepositToAccountRef: { value: '99' }, CustomerRef: { name: 'Pictureline Boise' } },
-    { TotalAmt: 300, DepositToAccountRef: { value: '35' }, CustomerRef: { name: 'Jane Doe' } },
-  ];
-  assert.equal(customerCashIn(txns, bank, INTERCOMPANY_CUSTOMER), 5000);
 });

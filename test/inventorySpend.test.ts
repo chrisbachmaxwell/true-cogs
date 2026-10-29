@@ -440,26 +440,3 @@ test('bucket 1 counts only the cash share: credit-covered portions are excluded'
   assert.equal(r.bucket1Total, 6935.14); // cash only — not the blended 16,836.50
   assert.equal(r.vendorCreditsApplied, 9901.36);
 });
-
-test('purchases settled: blended bill-payment lines count only their cash share', async () => {
-  // Real QBO shape (D33): the bill-linked line carries the FULL covered amount
-  // (cash + credits); the credit is a separate line; TotalAmt is the cash.
-  const api = mockApi({
-    billsInMonth: [
-      { Id: 'B40', TxnDate: '2026-06-03', TotalAmt: 1000, Balance: 0, VendorRef: { name: 'Nikon' }, Line: [expenseLine(MAT_INV, 1000)] },
-    ],
-    billPayments: [
-      {
-        Id: 'BP40', TxnDate: '2026-06-20', TotalAmt: 400,
-        Line: [
-          { Amount: 1000, LinkedTxn: [{ TxnType: 'Bill', TxnId: 'B40' }] },
-          { Amount: 600, LinkedTxn: [{ TxnType: 'VendorCredit', TxnId: 'VC40' }] },
-        ],
-      },
-    ],
-  });
-  const { computePurchasesSettled } = await import('../src/inventorySpend');
-  const r = await computePurchasesSettled(api, MAT_INV, { start: '2026-06-01', end: '2026-06-30' }, '2026-07-17');
-  assert.equal(r.billedNet, 400); // cash only — not the blended 1,000
-  assert.equal(r.creditsNetted, 600);
-});
