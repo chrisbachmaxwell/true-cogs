@@ -401,6 +401,8 @@ function renderCompare(a, b, labelA, labelB) {
     expenses: d.expenses.net,
     noi: d.adjusted ? d.adjusted.noi : d.noi,
     basis: d.adjusted ? 'accounting' : 'cash',
+    steadyPct: d.steady ? d.steady.grossMarginPct : null,
+    ownPct: d.steady ? d.steady.ownSalesMarginPct : null,
   });
   const A = pick(a), B = pick(b);
   const money = (v) => usd.format(v);
@@ -423,6 +425,8 @@ function renderCompare(a, b, labelA, labelB) {
     line('Gross margin', A.gpPct, B.gpPct, true) +
     line('Expenses', A.expenses, B.expenses) +
     line('Net operating income', A.noi, B.noi) +
+    (A.steadyPct != null || B.steadyPct != null ? line('Steady margin (bill timing removed)', A.steadyPct, B.steadyPct, true) : '') +
+    (A.ownPct != null || B.ownPct != null ? line('Margin on our own sales (no Boise)', A.ownPct, B.ownPct, true) : '') +
     '</tbody></table></div>' +
     (A.basis !== B.basis ? '<div class="dnote">Note: one side lacks inventory counts, so it shows the cash basis.</div>' : '');
   $('cmpCard').style.display = '';
@@ -479,6 +483,23 @@ async function load(force) {
     if (d.expenses.reimbursements) h += row('Less: reimbursements received', -d.expenses.reimbursements, null, 'reimbursements');
     h += row('Total expenses', d.expenses.net, 'total');
     h += row('Net operating income', d.adjusted ? d.adjusted.noi : d.noi, 'grand');
+    if (d.steady) {
+      // Same statement with bill-payment timing taken out, so years compare
+      // fairly: each bill counts when it arrived, at what we paid for it.
+      const s = d.steady;
+      const pctRow = (label, pct) => '<div class="srow sub"><span>' + label + '</span><span class="num">' +
+        (pct == null ? '—' : pct.toFixed(1) + '%') + '</span></div>';
+      h += '<div class="section">Steady view — bill timing removed</div>';
+      h += row('Inventory purchases (each bill on the day it arrived, at what we paid)', s.inventoryCost);
+      h += row(s.timingShift >= 0 ? 'Timing: bills that arrived this range but get paid later' : 'Timing: older bills paid off this range (their cost belongs earlier)', s.timingShift, 'sub');
+      h += row('Gross profit (steady)' + (s.grossMarginPct !== null ? ' — ' + s.grossMarginPct.toFixed(1) + '%' : ''), s.grossProfit, 'total');
+      if (s.ownSalesMarginPct !== null) h += pctRow('Margin on our own sales (leaving out ' + usd.format(s.intercompanyRevenue) + ' sold to Boise at cost)', s.ownSalesMarginPct);
+      h += row('Net operating income (steady)', s.noi, 'total');
+      h += '<div class="dnote">The statement above counts inventory cost on the day a bill is <em>paid</em> (your rule), so a year that pays down old bills looks worse and a year that lets bills pile up looks better. ' +
+        'This view counts each bill on the day it <em>arrived</em> instead — still at the cash actually paid, credits never counted — so years compare fairly. ' +
+        (s.openBillCount ? s.openBillCount + ' bill' + (s.openBillCount === 1 ? '' : 's') + ' (' + usd.format(s.openBillExpected) + ') are still unpaid and assumed paid in cash. ' : '') +
+        (s.ownSalesMarginPct !== null ? 'The own-sales margin assumes Boise pays about what the goods cost us.' : '') + '</div>';
+    }
     $('stmt').innerHTML = h;
     const w = $('warnings');
     w.innerHTML = '';

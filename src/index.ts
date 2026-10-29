@@ -3,7 +3,7 @@ import path from 'path';
 import { config, missingQboConfig } from './config';
 import { initDb, getConfigValue, setConfigValue, getCachedMonth, setCachedMonth, getPool } from './db';
 import { buildAuthUri, handleCallback, createQboApi, connectionStatus, QboApi } from './qbo';
-import { computeMonthlySpend, MonthlySpendResult, SpendOptions } from './inventorySpend';
+import { computeMonthlySpend, computePurchasesSettled, MonthlySpendResult, SpendOptions } from './inventorySpend';
 import { computeMonthlyPnl, MonthlyPnl, PnlContext } from './pnl';
 import { computePnlDetail, expenseAccountDetail, DetailRow } from './pnlDetail';
 import { computeCashFlow, reportBalances } from './cashflow';
@@ -2213,7 +2213,7 @@ async function getPnlCtx(api: QboApi): Promise<PnlContext & { accountNames: Map<
  * the other range endpoints; also the data source for /api/checks. */
 async function getStatement(range: { start: string; end: string }, force: boolean): Promise<any> {
   const { opts: spendOpts, cachePrefix } = await getSpendOpts(await getComputeApi());
-  const cacheKey = `${cachePrefix}stmt5:${range.start}:${range.end}`;
+  const cacheKey = `${cachePrefix}stmt6:${range.start}:${range.end}`;
   if (!force) {
     const cached = await getCachedMonth(cacheKey);
     const closed = range.end < new Date().toISOString().slice(0, 10);
@@ -2320,6 +2320,43 @@ async function getStatement(range: { start: string; end: string }, force: boolea
           noi: r2(adjustedGp - expensesNet),
         };
       }
+      // Steady view: the same statement with bill-payment timing taken out.
+      // Each inventory bill counts on the day it ARRIVED, at what we actually
+      // paid for it (credits never count; still-open bills assumed cash). So
+      // paying down an old pile of bills — or letting one build up — no
+      // longer moves cost between periods, and years compare fairly. A
+      // reference line only: the headline keeps Chris's paid-date rule (D33).
+      // Skipped under a funding exclusion, which the bill view can't mirror.
+      let steady: any = null;
+      if (!spendOpts.excludeFundingAccounts) {
+        try {
+          const today = new Date().toISOString().slice(0, 10);
+          const settled = await computePurchasesSettled(api, inventoryIds, range, today);
+          const cogsTotal = r2(
+            settled.total - (adjusted ? adjusted.inventoryChange : 0) + pnl.directCosts - pnl.cogsOffsets
+          );
+          const grossProfit = r2(pnl.revenueNet - cogsTotal);
+          // Boise buys at roughly cost: its revenue carries ~no profit, so the
+          // margin on our own sales is gross profit over revenue without it.
+          const ownRevenue = r2(pnl.revenueNet - pnl.intercompanyCashIn);
+          steady = {
+            basis: adjusted ? 'accounting' : 'cash',
+            inventoryCost: settled.total,
+            timingShift: r2(settled.total - pnl.cogs),
+            openBillCount: settled.openBillCount,
+            openBillExpected: settled.openBillExpected,
+            cogsTotal,
+            grossProfit,
+            grossMarginPct: pnl.revenueNet > 0 ? r2((grossProfit / pnl.revenueNet) * 100) : null,
+            noi: r2(grossProfit - expensesNet),
+            intercompanyRevenue: pnl.intercompanyCashIn,
+            ownSalesMarginPct:
+              pnl.intercompanyCashIn > 0 && ownRevenue > 0 ? r2((grossProfit / ownRevenue) * 100) : null,
+          };
+        } catch (err: any) {
+          console.warn('[pnl-statement] steady view unavailable:', err.message);
+        }
+      }
       const statement = {
         start: range.start,
         end: range.end,
@@ -2351,6 +2388,7 @@ async function getStatement(range: { start: string; end: string }, force: boolea
         },
         noi: r2(pnl.grossProfit - expensesNet),
         adjusted,
+        steady,
         bankInflows: pnl.bankInflows.total,
         warnings: pnl.warnings,
       };

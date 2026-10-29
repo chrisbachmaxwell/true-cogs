@@ -35,6 +35,10 @@ export interface MonthlyPnl {
     feedRefunds: number;
     total: number;
   };
+  /** Bank-landed money from the Boise store (intercompany inventory sales —
+   * already inside retailCashIn). Boise buys at roughly cost, so this is
+   * revenue with almost no margin; surfaced so margins can be read without it. */
+  intercompanyCashIn: number;
   /** Reference metric: everything that hit Bank-type accounts. */
   bankInflows: {
     deposits: number;
@@ -102,6 +106,21 @@ export function purchaseIncomePortion(
         sum += sign * (Number(line.Amount) || 0);
       }
     }
+  }
+  return sum;
+}
+
+/** The Boise store, as a customer name. */
+export const INTERCOMPANY_CUSTOMER = /boise/i;
+
+/** Bank-landed TotalAmt of customer payments/receipts from customers whose
+ * name matches — e.g. the Boise intercompany line. */
+export function customerCashIn(txns: any[], bankIds: Set<string>, customer: RegExp): number {
+  let sum = 0;
+  for (const t of txns || []) {
+    if (!bankIds.has(t?.DepositToAccountRef?.value)) continue;
+    if (!customer.test(String(t?.CustomerRef?.name || ''))) continue;
+    sum += Number(t.TotalAmt) || 0;
   }
   return sum;
 }
@@ -233,6 +252,10 @@ export async function computeMonthlyPnl(
       feedRefunds,
       total: retailTotal,
     },
+    intercompanyCashIn: round2(
+      customerCashIn(payments, bankIds, INTERCOMPANY_CUSTOMER) +
+        customerCashIn(salesReceipts, bankIds, INTERCOMPANY_CUSTOMER)
+    ),
     bankInflows: {
       deposits: round2(bankDeposits),
       directSalesReceipts: round2(directSr),

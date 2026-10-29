@@ -378,13 +378,31 @@ export async function computePurchasesSettled(
   // Cash applied per bill, from every payment dated bill-period start → today.
   const cashByBill = new Map<string, number>();
   for (const bp of await api.queryByDateRange('BillPayment', range.start, today)) {
+    // Bill-linked lines can carry the bill's FULL covered amount (cash and
+    // applied credits blended — D33), so scale them by the payment's cash
+    // share, exactly like bucket 1. TotalAmt is the actual cash; without it,
+    // bill coverage minus the credit-only lines is.
+    let billLinesTotal = 0;
+    let creditOnlyTotal = 0;
+    for (const line of bp.Line || []) {
+      const linked: any[] = line.LinkedTxn || [];
+      const toCredit = linked.some((t) => t.TxnType === 'VendorCredit');
+      const toBill = linked.some((t) => t.TxnType === 'Bill');
+      if (toBill && !toCredit) billLinesTotal += Number(line.Amount) || 0;
+      else if (toCredit && !toBill) creditOnlyTotal += Number(line.Amount) || 0;
+    }
+    const paymentCash = bp.TotalAmt !== undefined && bp.TotalAmt !== null
+      ? Number(bp.TotalAmt) || 0
+      : Math.max(billLinesTotal - creditOnlyTotal, 0);
+    const cashFraction = billLinesTotal > 0 ? Math.max(0, Math.min(paymentCash / billLinesTotal, 1)) : 1;
     for (const line of bp.Line || []) {
       // A credit-application line links BOTH the VendorCredit and the Bill it
       // pays down — that's credit coverage, not cash. Same precedence as bucket 1.
       if ((line.LinkedTxn || []).some((t: any) => t.TxnType === 'VendorCredit')) continue;
       const linked = (line.LinkedTxn || []).find((t: any) => t.TxnType === 'Bill');
       if (!linked) continue;
-      cashByBill.set(String(linked.TxnId), (cashByBill.get(String(linked.TxnId)) || 0) + (Number(line.Amount) || 0));
+      const cash = (Number(line.Amount) || 0) * cashFraction;
+      cashByBill.set(String(linked.TxnId), (cashByBill.get(String(linked.TxnId)) || 0) + cash);
     }
   }
 
